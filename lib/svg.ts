@@ -47,3 +47,35 @@ export function svgScalable(raw: string): string {
 
   return raw.slice(0, m.index) + `<svg${attrs}>` + raw.slice(m.index + m[0].length);
 }
+
+// SVG内の stroke / fill の色（none 以外）を指定色へ一括置換する。単色アイコンの色替え用。
+// currentColor もこの色に置き換わる（＝確実に見た目の色が変わる）。
+export function recolorSvg(svg: string, color: string): string {
+  if (!svg) return svg;
+  const replaceAttr = (src: string, attr: string) =>
+    src.replace(new RegExp(`${attr}\\s*=\\s*"([^"]*)"`, "gi"), (_m, v: string) => (v.trim().toLowerCase() === "none" ? `${attr}="none"` : `${attr}="${color}"`));
+  return replaceAttr(replaceAttr(svg, "stroke"), "fill");
+}
+
+// パスSVG（fill/stroke="currentColor"）に CSS linear-gradient を適用して返す。
+// グラデ無し（undefined/非対応）ならそのまま返す。表示・書き出しの両方で使う。
+// gradientVec は studioExport と同じ規約（objectBoundingBox・y下向き）。
+export function applyPathGradient(svg: string, gradient: string | undefined, id: string): string {
+  if (!gradient) return svg;
+  const angle = Number(/(-?[\d.]+)deg/.exec(gradient)?.[1] ?? "135");
+  const colors = gradient.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)/g);
+  if (!colors || colors.length < 1) return svg;
+  const c1 = colors[0];
+  const c2 = colors[1] ?? colors[0];
+  const a = ((isFinite(angle) ? angle : 135) * Math.PI) / 180;
+  const x = Math.sin(a);
+  const y = -Math.cos(a);
+  const r = (n: number) => Math.round(n * 1e4) / 1e4;
+  const gid = `sg-${id}`;
+  const defs = `<defs><linearGradient id="${gid}" x1="${r(0.5 - x / 2)}" y1="${r(0.5 - y / 2)}" x2="${r(0.5 + x / 2)}" y2="${r(0.5 + y / 2)}"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>`;
+  const url = `url(#${gid})`;
+  return svg
+    .replace(/(<svg\b[^>]*>)/i, `$1${defs}`)
+    .replace(/fill="currentColor"/g, `fill="${url}"`)
+    .replace(/stroke="currentColor"/g, `stroke="${url}"`);
+}

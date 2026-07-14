@@ -6,6 +6,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { type StudioElement, type StudioElementType, type StudioStyle, type PathNode } from "./types";
 import { wireHistory } from "./undoable";
+import { guardedStorage } from "./persistGuard";
 
 // 要素の部分更新。position/size/style は入れ子なので浅くマージする。
 export interface StudioPatch {
@@ -16,6 +17,8 @@ export interface StudioPatch {
   style?: Partial<StudioStyle>;
   points?: StudioElement["points"];
   closed?: boolean;
+  maskShape?: string; // 画像マスクのプリセット図形（"" で解除）
+  maskSvg?: string; // 画像マスクの任意SVG（"" で解除）
 }
 
 // ---- ID 採番（クライアント操作のみ・SSR不一致は起きない） ---------------------
@@ -136,7 +139,7 @@ function newElement(type: StudioElementType, index: number, count: number): Stud
         ...base,
         size: { width: 220, height: 56 },
         style: { backgroundColor: "transparent", color: "#0f172a", opacity: 1, borderRadius: 0, zIndex: index, fontSize: 24, fontWeight: 700, textAlign: "left" },
-        content: "テキスト",
+        content: "", // 空＝プレースホルダー表示。入力すると消える
       };
     case "image":
       return {
@@ -216,6 +219,7 @@ interface StudioState {
   tool: Tool;
   draft: { points: Pt[]; ortho: boolean } | null; // 描画中のパス
   select: (id: string | null, additive?: boolean) => void; // additive=Shift/⌘での加算選択
+  selectMany: (ids: string[]) => void; // 範囲ドラッグ（マーキー）などでまとめて選択
   add: (type: StudioElementType) => void;
   update: (id: string, patch: StudioPatch) => void;
   remove: (id: string) => void;
@@ -232,6 +236,7 @@ interface StudioState {
   // 重なり順（配列の並び）を1つ前面/背面へ。
   bringForward: (id: string) => void;
   sendBackward: (id: string) => void;
+  moveLayer: (activeId: string, overId: string) => void; // ドラッグで任意の重なり順へ
   // ペンツール操作
   setTool: (t: Tool) => void;
   penAddPoint: (pt: Pt) => void;
@@ -270,6 +275,14 @@ export const useStudio = create<StudioState>()(
           return { selectedIds: [...set2] };
         }),
 
+      // 範囲選択：交差した要素をまとめて選択（グループはメンバー全員を含める）
+      selectMany: (ids) =>
+        set((s) => {
+          const out = new Set<string>();
+          ids.forEach((id) => groupMemberIds(s.elements, id).forEach((m) => out.add(m)));
+          return { selectedIds: [...out] };
+        }),
+
       add: (type) =>
         set((s) => {
           const el = newElement(type, s.elements.length, s.elements.length);
@@ -285,6 +298,8 @@ export const useStudio = create<StudioState>()(
               ...(patch.type ? { type: patch.type } : {}),
               ...(patch.content !== undefined ? { content: patch.content } : {}),
               ...(patch.closed !== undefined ? { closed: patch.closed } : {}),
+              ...(patch.maskShape !== undefined ? { maskShape: patch.maskShape || undefined } : {}),
+              ...(patch.maskSvg !== undefined ? { maskSvg: patch.maskSvg || undefined } : {}),
               position: { ...el.position, ...patch.position },
               size: { ...el.size, ...patch.size },
               style: { ...el.style, ...patch.style },
@@ -420,6 +435,16 @@ export const useStudio = create<StudioState>()(
           return { elements: reindex(arrayMove(s.elements, i, i - 1)) };
         }),
 
+      // レイヤーをドラッグで任意の重なり順へ移動（active を over の位置へ）
+      moveLayer: (activeId, overId) =>
+        set((s) => {
+          if (activeId === overId) return s;
+          const from = s.elements.findIndex((el) => el.id === activeId);
+          const to = s.elements.findIndex((el) => el.id === overId);
+          if (from === -1 || to === -1) return s;
+          return { elements: reindex(arrayMove(s.elements, from, to)) };
+        }),
+
       // --- ペンツール ---
       setTool: (t) =>
         set((s) => {
@@ -479,12 +504,13 @@ export const useStudio = create<StudioState>()(
                 return toNode({ x: cx + Math.cos(a) * (w / 2), y: cy + Math.sin(a) * (h / 2) }, false);
               });
             }
-            // 塗り色を currentColor に引き継ぐ（グラデは単色化）。図形の背景は透明に。
+            // 単色塗りは currentColor に、グラデーションはそのまま保持してパスにも適用する。
+            // 図形の“箱の背景”は透明にし、描画はパス側で行う（背景側の四角いグラデが漏れないように）。
             const fill = el.style.backgroundColor && /^#/.test(el.style.backgroundColor) ? el.style.backgroundColor : el.style.color ?? "#38bdf8";
             return {
               ...el,
               type: "svg",
-              style: { ...el.style, color: fill, backgroundColor: "transparent", backgroundGradient: undefined, borderRadius: 0 },
+              style: { ...el.style, color: fill, backgroundColor: "transparent", backgroundGradient: el.style.backgroundGradient, borderRadius: 0 },
               ...renormPath(nodes, true),
             };
           }),
@@ -535,6 +561,8 @@ export const useStudio = create<StudioState>()(
     {
       name: "design-sync-studio-v1",
       version: 2,
+      // クライアントモード中は書き込まない（読み込みのみ）
+      storage: guardedStorage(),
       partialize: (s) => ({ elements: s.elements }),
       skipHydration: true,
       // v1: points が {x,y}[] だった → PathNode[]（id/isCorner付き）へ移行。

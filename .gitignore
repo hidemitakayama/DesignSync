@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ローカル作業用（公開リポジトリには入れない）
+/Untitled
+/designsync-live.json
+/designsync-project*.bak
+/designsync-project_backup.json
+/manabill_top.html
+# 案件の素材・資料（画像アセットや配布資料）
+/public/minori-ai/
+*.pdf

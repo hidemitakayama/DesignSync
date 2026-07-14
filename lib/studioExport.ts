@@ -7,6 +7,8 @@
 
 import type { StudioElement } from "./types";
 import { isDriveRef, refToDataUri } from "./imageStore";
+import { applyPathGradient } from "./svg";
+import { svgMaskMarkup } from "./mask";
 
 export type ExportFormat = "svg" | "png" | "jpeg" | "webp";
 
@@ -128,7 +130,11 @@ function elementSvg(el: StudioElement, defs: string[], i: number): string {
   }
   if (el.type === "image") {
     let clipAttr = "";
-    if (s.borderRadius) {
+    const mk = svgMaskMarkup({ shape: el.maskShape, svg: el.maskSvg }, `imgmask${i}`, x, y, w, h);
+    if (mk) {
+      defs.push(mk);
+      clipAttr = ` mask="url(#imgmask${i})"`;
+    } else if (s.borderRadius) {
       const id = `clip${i}`;
       defs.push(`<clipPath id="${id}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${s.borderRadius}"/></clipPath>`);
       clipAttr = ` clip-path="url(#${id})"`;
@@ -137,7 +143,12 @@ function elementSvg(el: StudioElement, defs: string[], i: number): string {
   }
   // svg（パス等）：保存済みの <svg viewBox=...> に位置・サイズ・色を差し込んで入れ子にする。
   // 表示(svgScalable)と同じく preserveAspectRatio="none" で枠いっぱいに。currentColor は style の color で解決。
-  const nested = el.content.replace(/^<svg\b/i, `<svg x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="none" style="color:${s.color ?? "#0f172a"}"`);
+  // グラデーション塗りのパスは applyPathGradient で <linearGradient> を埋め込んで適用（表示と同一結果）。
+  const nested = applyPathGradient(
+    el.content.replace(/^<svg\b/i, `<svg x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="none" style="color:${s.color ?? "#0f172a"}"`),
+    s.backgroundGradient,
+    el.id,
+  );
   return `<g${op}${filterAttr}>${nested}</g>`;
 }
 

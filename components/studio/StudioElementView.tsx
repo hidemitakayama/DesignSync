@@ -1,7 +1,8 @@
 "use client";
 import { useRef, useState } from "react";
 import { useStudio } from "@/lib/studioStore";
-import { svgScalable } from "@/lib/svg";
+import { svgScalable, applyPathGradient } from "@/lib/svg";
+import { maskCss, hasMask } from "@/lib/mask";
 import type { StudioElement } from "@/lib/types";
 import { useImageSrc } from "./useImageSrc";
 
@@ -98,8 +99,11 @@ export default function StudioElementView({ el, selected, soleSelected = false, 
   };
 
   const s = el.style;
-  const background = s.backgroundGradient ?? s.backgroundColor;
+  // svg（パス）は箱ではなくパスで描くので、箱の背景は出さない（グラデはパス側に適用）。
+  const background = el.type === "svg" ? undefined : (s.backgroundGradient ?? s.backgroundColor);
   const radius = el.type === "circle" ? "50%" : `${s.borderRadius}px`;
+  // 画像を図形/SVGでマスクしている場合は、箱の背景・矩形の影・角丸を消す（形状は画像側のマスクで表現）。
+  const imgMasked = el.type === "image" && hasMask({ shape: el.maskShape, svg: el.maskSvg });
 
   return (
     <div
@@ -117,9 +121,10 @@ export default function StudioElementView({ el, selected, soleSelected = false, 
         height: el.size.height,
         opacity: s.opacity,
         zIndex: s.zIndex,
-        background, // 塗り（グラデ優先）。text/svg は既定 transparent なので無害
-        borderRadius: radius,
-        boxShadow: s.boxShadow,
+        background: imgMasked ? undefined : background, // 塗り（グラデ優先）。text/svg は既定 transparent なので無害
+        borderRadius: imgMasked ? 0 : radius,
+        // svg（パス）／マスク画像は箱に影を付けない（四角い影になるため）。影は形状に沿わせる（下の filter/drop-shadow）。
+        boxShadow: el.type === "svg" || imgMasked ? undefined : s.boxShadow,
         cursor: editing ? "text" : nodeMode ? "pointer" : "move",
         touchAction: "none",
         userSelect: "none",
@@ -160,6 +165,7 @@ function ElementContent({ el, editing, onCommit, onCancel }: { el: StudioElement
         <textarea
           autoFocus
           defaultValue={el.content}
+          placeholder="テキストを入力"
           onPointerDown={(e) => e.stopPropagation()}
           onBlur={(e) => onCommit(e.target.value)}
           onKeyDown={(e) => {
@@ -173,21 +179,26 @@ function ElementContent({ el, editing, onCommit, onCancel }: { el: StudioElement
     }
     return (
       <div
-        style={{ color: s.color, fontSize: s.fontSize, fontWeight: s.fontWeight, textAlign: s.textAlign, whiteSpace: "pre-wrap", overflow: "hidden" }}
+        style={{ color: s.color, fontSize: s.fontSize, fontWeight: s.fontWeight, textAlign: s.textAlign, whiteSpace: "pre-wrap", overflow: "hidden", opacity: el.content ? undefined : 0.4 }}
         className="pointer-events-none h-full w-full p-1 leading-tight"
       >
-        {el.content || "テキスト"}
+        {el.content || "テキストを入力"}
       </div>
     );
   }
 
   if (el.type === "image") {
+    const masked = hasMask({ shape: el.maskShape, svg: el.maskSvg });
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={imgSrc} alt="" draggable={false} className="pointer-events-none h-full w-full select-none object-cover" style={{ borderRadius: `${s.borderRadius}px` }} />;
+    return <img src={imgSrc} alt="" draggable={false} className="pointer-events-none h-full w-full select-none object-cover" style={{ borderRadius: masked ? 0 : `${s.borderRadius}px`, ...maskCss({ shape: el.maskShape, svg: el.maskSvg }), filter: masked && s.boxShadow ? `drop-shadow(${s.boxShadow})` : undefined }} />;
   }
 
   if (el.type === "svg") {
-    return <div className="pointer-events-none h-full w-full" style={{ color: s.color }} dangerouslySetInnerHTML={{ __html: svgScalable(el.content) }} />;
+    // グラデーション塗り/線があればパスに適用（無ければ currentColor のまま）
+    const html = applyPathGradient(svgScalable(el.content), s.backgroundGradient, el.id);
+    // 影はパスの形に沿わせる（drop-shadow は描画ピクセルの形に影を落とす）
+    const filter = s.boxShadow ? `drop-shadow(${s.boxShadow})` : undefined;
+    return <div className="pointer-events-none h-full w-full" style={{ color: s.color, filter }} dangerouslySetInnerHTML={{ __html: html }} />;
   }
 
   // rectangle / circle は塗りのみ（背景は親div側で描画）

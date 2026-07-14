@@ -20,21 +20,53 @@ export type AlignItems = "flex-start" | "center" | "flex-end" | "stretch";
 // 親コンテナ内での“自分だけ”の揃え（align-self）。制約を保ったまま位置を寄せられる。
 export type AlignSelf = "auto" | "flex-start" | "center" | "flex-end" | "stretch";
 
+// 背景パターン（ノート風の方眼/罫線/ドット）。線の色・間隔を自由に指定できる。
+// 実際の描画は background（単色ベース）の上にこのパターンを重ねて合成する（lib/patterns.ts）。
+export type BgPatternKind = "grid" | "ruled" | "dot";
+export interface BgPattern {
+  kind: BgPatternKind;
+  color: string; // 線/ドットの色
+  size?: number; // マス目/間隔(px)。未指定は種類ごとの既定値
+}
+
+// 背景画像（ヒーローの全画面写真など）。background（単色ベース）の上に敷く。
+export interface BgImage {
+  src: string; // 画像URL / データURL
+  fit?: "cover" | "contain"; // 既定 cover（全面を覆う）
+  overlay?: number; // 上に重ねる黒の不透明度 0〜1（文字を読みやすくする。未指定=なし）
+  scale?: number; // 拡大縮小（1=等倍・既定。1.2で20%拡大／0.8で縮小）
+  flipH?: boolean; // 水平反転（左右）
+  flipV?: boolean; // 垂直反転（上下）
+}
+
 export interface LayoutRules {
   direction: FlexDirection;
   justify: JustifyContent;
   align: AlignItems;
   gap: number; // 子要素の間隔(px)
-  background?: string; // 背景色（任意）
+  background?: string; // 背景色（任意・単色ベース）
+  bgPattern?: BgPattern; // 背景パターン（任意）。background の上に重ねる
+  bgImage?: BgImage; // 背景画像（任意）。background の上に敷く（全画面写真など）
+  fullHeight?: boolean; // 画面の高さいっぱい（min-height:100vh）。ヒーロー等の全画面表示用
   radius?: number; // 角丸(px)（カード/ボタン表現用・任意）
   grow?: boolean; // flex:1 で伸ばすか（横並びカードの均等割り等）
   wrap?: boolean; // flex-wrap: wrap（はみ出たら自動で折り返す）
   columns?: number; // 1行あたりの枚数。指定すると子を等幅にし、N枚ごとに折り返す（row方向・wrap前提）
+  width?: number; // 幅(px)。指定するとその幅に固定（未指定=自動＝親に合わせて伸縮）
   minHeight?: number; // 最小の高さ(px)。セクション等の大きさ調整に使う（中身が増えれば伸びる）
+  // 最上位セクションの中身の寄せ方（フルブリード時）："center"=中央(既定) / "left"=常に画面左に寄せる。
+  // 背景は常に全幅。left のときは中身(最大幅)を左端ガターに固定する。
+  contentAlign?: "center" | "left";
+  // 枠線・影（カード表現用）
+  borderWidth?: number;
+  borderColor?: string;
+  boxShadow?: string; // CSS box-shadow（プリセットから選択）
 }
 
 // flexアイテムとしての共通プロパティ（コンテナ・Atom双方が持つ）
 export interface ItemProps {
+  boxShadow?: string; // 影（CSS box-shadow）。Atom（画像/SVG）の影オン/オフに使う。未指定=なし
+  opacity?: number; // 不透明度 0〜1（未指定/1＝不透明）。コンテナ・Atom双方で使える
   alignSelf?: AlignSelf; // 親の中での自分の揃え
   basis?: number; // flex-basis(px)。折り返しの基準幅。未指定=auto
   breakAfter?: boolean; // この要素の後で強制的に折り返す（親がwrapのとき有効）
@@ -49,6 +81,33 @@ export interface ItemProps {
   marginRight?: number;
   marginBottom?: number;
   marginLeft?: number;
+  sp?: SpOverride; // SP（スマホ）表示だけの上書き。未指定はPC値を継承。
+  hiddenPc?: boolean; // PC（デスクトップ）で非表示＝SPのみ表示（例：ハンバーガー）。
+}
+
+// SP（スマホ表示）だけの上書き値。未指定の項目はPC値を継承。
+// ＝レスポンシブ：1つのデータで PC/SP 両対応（書き出しはメディアクエリ）。
+export interface SpOverride {
+  hidden?: boolean; // SPで非表示
+  // テキスト
+  fontSize?: number;
+  lineHeight?: number;
+  letterSpacing?: number;
+  align?: "left" | "center" | "right";
+  // コンテナ（reverse で並び順も反転できる：写真→文字に揃える等）
+  direction?: "row" | "column" | "row-reverse" | "column-reverse";
+  justify?: JustifyContent;
+  alignItems?: AlignItems;
+  gap?: number;
+  // 余白（両方）：一括 or 左右/上下だけ
+  padding?: number;
+  paddingX?: number;
+  paddingY?: number;
+  // アイテム
+  width?: number;
+  basis?: number | "auto"; // flex-basis（縦積み時は高さ）。"auto"で内容に合わせる
+  minHeight?: number; // 最小の高さ（写真バナー等）
+  alignSelf?: AlignSelf; // 親内での自分の寄せ（ボタンを全幅にする等）
 }
 
 export type ContainerType = "section" | "group";
@@ -69,6 +128,19 @@ export interface TextStyle {
   fontWeight?: number; // 400/600/700/800 等
   align?: "left" | "center" | "right";
   fontFamily?: string; // フォントid（lib/fonts.ts の FontId）。未指定=標準
+  lineHeight?: number; // 行間（倍率。例 1.6）。未指定=ブラウザ既定
+  letterSpacing?: number; // 文字間隔(px。負も可)。未指定=0
+  preserveBreaks?: boolean; // 改行を反映するか。未指定/true=反映(pre-wrap)、false=改行を無視して詰める(normal)
+  // 枠線（テキストを囲む）
+  borderWidth?: number; // px（0/未指定=なし）
+  borderColor?: string;
+  borderRadius?: number; // px（角丸）
+}
+
+// 文章内の色付き区間（一部分だけ色を変える）。runs があれば text より優先して描画。
+export interface TextRun {
+  text: string;
+  color?: string; // 未指定＝基本色(style.color)を継承
 }
 
 export interface AtomNode extends ItemProps {
@@ -77,12 +149,17 @@ export interface AtomNode extends ItemProps {
   atomType: AtomType;
   name: string;
   // 中身（atomType により使うフィールドが変わる）
-  text?: string; // text
+  text?: string; // text（プレーン。runs 未指定時の内容）
+  runs?: TextRun[]; // text の色付き区間（一部分だけ色変更）。あれば優先
   src?: string; // image のURL
   alt?: string; // image の代替テキスト
+  maskShape?: string; // image を図形で切り抜くプリセットキー（lib/mask.ts の MASK_SHAPES）
+  maskSvg?: string; // image を任意SVGで切り抜く（生コード。maskShape より優先）
   svg?: string; // svg の生コード（Figma等からのエクスポート）
   width?: number; // image/svg の幅(px)
   height?: number; // image/svg の高さ(px)
+  points?: PathNode[]; // パス変形（頂点編集）用。svg atom を編集可能パスにしたときの点列（ローカル座標 0..width/height）
+  closed?: boolean; // パスが閉じているか（塗り）／開いているか（線）
   style?: TextStyle; // text の装飾
   grow?: boolean; // 親Flex内で伸ばすか
   // 自由配置（absolute）。true のとき Flex フローから外れ、親コンテナ基準で x,y に置く。
@@ -100,11 +177,18 @@ export interface Page {
   children: ContainerNode[]; // トップレベルは Section
 }
 
+// 保存済みページの種別：再利用する「テンプレート」か、実案件の「クライアント」か。
+// クライアントモード（非管理者）ではテンプレートのみ見え、他社の案件は隠れる。
+export type TemplateKind = "template" | "client";
+
 // 保存済みページテンプレート（スナップショット）。テンプレート画面で管理。
 export interface PageTemplate {
   id: string;
   name: string;
-  page: Page; // 適用時に複製して作業ページへ読み込む
+  kind?: TemplateKind; // 未指定は "template" 扱い（後方互換）
+  page: Page; // PC版。適用時に複製して作業ページへ読み込む
+  spPage?: Page | null; // SP版（あれば）。適用時に一緒に復元する
+  updatedAt?: number; // 最終更新日時（epoch ms）。保存・上書き・名称/種別変更・自動保存で更新
 }
 
 // 型ガード
@@ -176,6 +260,8 @@ export interface StudioElement {
   size: { width: number; height: number };
   style: StudioStyle;
   content: string; // text=本文 / image=URL / svg=生コード（図形は未使用）
+  maskShape?: string; // image を図形で切り抜くプリセットキー（lib/mask.ts の MASK_SHAPES）
+  maskSvg?: string; // image を任意SVGで切り抜く（生コード。maskShape より優先）
   // --- 曲線ツール（パス変形）用（type==="svg" のうち編集可能なパスのみ） ---
   // 輪郭を表す点列。存在すれば曲線ツールの編集対象になる。
   points?: PathNode[];

@@ -1,10 +1,14 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { warnIfUnsynced } from "@/lib/uiStore";
 import { Spline, Upload } from "lucide-react";
 import { useStudio } from "@/lib/studioStore";
 import { useImages, isDriveRef } from "@/lib/imageStore";
 import { dirSupported } from "@/lib/fsHandle";
 import type { StudioElement } from "@/lib/types";
+import { recolorSvg } from "@/lib/svg";
+import { MaskControls } from "@/components/MaskControls";
+import { outlineTextElement } from "@/lib/textToPath";
 
 // 右：選択要素のプロパティ編集。X/Y/W/H、塗り（単色⇄グラデ）、角丸・透明度スライダー、影、種類別の中身。
 // 既存ビルダーの PropertiesPanel と同じ見た目の部品（Field/inputCls）で統一する。
@@ -15,8 +19,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <label className="block">
       <span className="mb-1 flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-semibold text-slate-600">{label}</span>
-        {hint && <span className="shrink-0 text-[10px] font-normal text-slate-300">{hint}</span>}
+        <span className="shrink-0 whitespace-nowrap text-[11px] font-semibold text-slate-600">{label}</span>
+        {hint && <span className="min-w-0 truncate text-right text-[10px] font-normal text-slate-300" title={hint}>{hint}</span>}
       </span>
       {children}
     </label>
@@ -116,6 +120,7 @@ function ImageControls({ el }: { el: StudioElement }) {
       ) : (
         <p className="text-[10px] leading-relaxed text-slate-400">このブラウザはフォルダ保存に非対応です。画像はURLを指定してください（アップロード保存は Chrome/Edge 推奨）。</p>
       )}
+      <MaskControls shape={el.maskShape} svg={el.maskSvg} onChange={(m) => update(el.id, m)} />
     </>
   );
 }
@@ -132,7 +137,7 @@ export default function StudioProperties() {
   // 未選択
   if (selectedIds.length === 0) {
     return (
-      <aside className="w-72 shrink-0 border-l border-slate-200 bg-white p-4">
+      <aside className="w-72 shrink-0 border-l border-slate-200 bg-white p-4" onPointerDownCapture={warnIfUnsynced}>
         <p className="text-sm text-slate-400">要素を選ぶと、ここで編集できます。</p>
         <p className="mt-2 text-[11px] leading-relaxed text-slate-400">Shift／⌘＋クリックで複数選択できます。</p>
       </aside>
@@ -143,7 +148,7 @@ export default function StudioProperties() {
   if (selectedIds.length >= 2) {
     const canUngroup = elements.some((e) => selectedIds.includes(e.id) && e.groupId);
     return (
-      <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white">
+      <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white" onPointerDownCapture={warnIfUnsynced}>
         <div className="border-b border-slate-100 px-4 py-2.5">
           <p className="text-xs font-bold text-slate-500">設定</p>
           <p className="mt-0.5 text-[11px] text-slate-400">{selectedIds.length}個を選択中</p>
@@ -164,11 +169,12 @@ export default function StudioProperties() {
   const typeLabel = { rectangle: "四角形", circle: "円", text: "テキスト", image: "画像", svg: "SVG図形" }[el.type];
   const isGradient = !!s.backgroundGradient;
   const grad = parseGradient(s.backgroundGradient);
+  const svgColor = el.content.match(/(?:stroke|fill)\s*=\s*"(?!none)([^"]+)"/i)?.[1] ?? s.color ?? "#0ea5e9";
 
   const setStyle = (patch: Partial<StudioElement["style"]>) => update(el.id, { style: patch });
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white">
+    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white" onPointerDownCapture={warnIfUnsynced}>
       <div className="border-b border-slate-100 px-4 py-2.5">
         <p className="text-xs font-bold text-slate-500">設定</p>
         <p className="mt-0.5 text-[11px] text-slate-400">{typeLabel}</p>
@@ -227,12 +233,30 @@ export default function StudioProperties() {
             </div>
             <Field label="揃え">
               <select value={s.textAlign ?? "left"} onChange={(e) => setStyle({ textAlign: e.target.value as "left" | "center" | "right" })} className={inputCls}>
-                <option value="left">左</option>
-                <option value="center">中央</option>
-                <option value="right">右</option>
+                <option value="left">左揃え</option>
+                <option value="center">中央揃え</option>
+                <option value="right">右揃え</option>
               </select>
             </Field>
             <Field label="文字色"><ColorInput value={s.color} onChange={(v) => setStyle({ color: v })} /></Field>
+            <button
+              onClick={async (ev) => {
+                const btn = ev.currentTarget; const label = btn.textContent;
+                if (!el.content.trim()) { window.alert("先にテキストを入力してください。"); return; }
+                btn.disabled = true; btn.textContent = "アウトライン化中…（フォント取得）";
+                try {
+                  const r = await outlineTextElement(el.content, s.fontSize ?? 16, s.fontWeight ?? 400, s.textAlign ?? "left", s.color ?? "#0f172a");
+                  update(el.id, { type: "svg", content: r.svg, size: { width: r.width, height: r.height }, style: { color: s.color ?? "#0f172a" } });
+                } catch (e) {
+                  window.alert("アウトライン化に失敗しました（フォントの読み込み）。オンライン環境でお試しください。\n" + (e instanceof Error ? e.message : String(e)));
+                  btn.disabled = false; btn.textContent = label;
+                }
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 py-1.5 text-xs font-semibold text-violet-700 hover:border-violet-400 disabled:opacity-60"
+            >
+              <Spline size={13} /> 文字をアウトライン化（パス）
+            </button>
+            <p className="text-[10px] leading-relaxed text-slate-400">文字をベクターパス（SVG図形）に変換します。フォント非依存になり、曲線ツールでの編集や忠実な書き出しが可能に。※初回はフォント取得に数秒（日本語は数MB）。変換後は元に戻せないため複製推奨。</p>
           </>
         )}
         {el.type === "image" && (
@@ -244,8 +268,10 @@ export default function StudioProperties() {
         {el.type === "svg" && (
           <>
             <GroupTitle>SVG</GroupTitle>
-            <Field label="SVGコード" hint="currentColorで色連動"><textarea value={el.content} onChange={(e) => update(el.id, { content: e.target.value })} rows={4} className={`${inputCls} font-mono text-[11px]`} /></Field>
-            <Field label="色" hint="fill/stroke=currentColor時"><ColorInput value={s.color} onChange={(v) => setStyle({ color: v })} /></Field>
+            <Field label="SVGコード"><textarea value={el.content} onChange={(e) => update(el.id, { content: e.target.value })} rows={4} className={`${inputCls} font-mono text-[11px]`} /></Field>
+            <Field label="色" hint="stroke/fill を一括で塗り替え">
+              <ColorInput value={svgColor} onChange={(v) => { update(el.id, { content: recolorSvg(el.content, v) }); setStyle({ color: v }); }} />
+            </Field>
           </>
         )}
 

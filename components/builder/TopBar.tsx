@@ -3,10 +3,12 @@ import { useState, useEffect, useRef } from "react";
 import { ShieldCheck, User, Layers, LayoutTemplate, LayoutGrid, Library, PenTool, Undo2, Redo2, Copy, ClipboardPaste, Keyboard } from "lucide-react";
 import { useBuilder, builderHistory } from "@/lib/store";
 import { useStudio, studioHistory } from "@/lib/studioStore";
-import { serializeProject } from "@/lib/project";
+import { serializeProject, applyProject } from "@/lib/project";
 import { saveBlob } from "@/lib/download";
 import ProjectMenu from "@/components/ProjectMenu";
+import LiveSync from "@/components/LiveSync";
 import HelpModal from "@/components/HelpModal";
+import AdminGateModal from "@/components/AdminGateModal";
 import { Menu, MenuItem, MenuDivider } from "./Menu";
 import type { View } from "@/lib/types";
 
@@ -22,6 +24,33 @@ export default function TopBar() {
 
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false); // 管理者モードのパスワード入力
+  const clientSnapshot = useRef<string | null>(null); // クライアントに切り替えた瞬間の内容（＝管理者の最後の状態）
+
+  // クライアント中は保存・同期を一切しない（localStorage も同期ファイルも書かない）。
+  // そのため「クライアント中の編集」は捨て、管理者に戻すときに管理者の状態へ復元する。
+  const toClient = () => {
+    clientSnapshot.current = serializeProject();
+    setMode("client");
+  };
+  // 復元 → そのあとに解錠。順序が逆だと、解錠した瞬間の保存で
+  // 「クライアントが編集した内容」が localStorage を上書きしてしまう。
+  const toAdmin = async () => {
+    const snap = clientSnapshot.current;
+    clientSnapshot.current = null;
+    try {
+      if (snap) applyProject(snap);
+      else {
+        // リロードを挟んだ等でスナップショットが無い場合は、保存済み（＝管理者の最後の状態）から復元
+        await Promise.resolve(useBuilder.persist.rehydrate());
+        await Promise.resolve(useStudio.persist.rehydrate());
+      }
+    } catch {}
+    builderHistory.clear();
+    studioHistory.clear();
+    setMode("admin"); // ここから保存・同期が有効になる（復元後の内容が保存される）
+    setGateOpen(false);
+  };
   const toggle = (id: MenuId) => setOpenMenu((cur) => (cur === id ? null : id));
   const close = () => setOpenMenu(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -125,6 +154,8 @@ export default function TopBar() {
       </nav>
 
       <div className="ml-auto flex items-center gap-3">
+        {/* Cursorとのライブ同期（管理者のみ） */}
+        {admin && <LiveSync />}
         {/* よく使う 元に戻す/やり直す はバーにも残す */}
         <div className="flex items-center gap-0.5">
           <button onClick={() => hist.undo()} disabled={!undoOk} title="元に戻す（⌘Z）" className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:hover:bg-transparent">
@@ -139,13 +170,13 @@ export default function TopBar() {
           <Keyboard size={16} />
         </button>
 
-        {/* モード切替（トグルスイッチ） */}
+        {/* モード切替（トグルスイッチ）。管理者側へはパスワード入力を挟む。 */}
         <div className="flex items-center gap-2 text-xs font-semibold" title="管理者/クライアントの切替">
           <span className={`flex items-center gap-1 ${admin ? "text-slate-900" : "text-slate-400"}`}><ShieldCheck size={14} /> 管理者</span>
           <button
             role="switch"
             aria-checked={!admin}
-            onClick={() => setMode(admin ? "client" : "admin")}
+            onClick={() => (admin ? toClient() : setGateOpen(true))}
             className={`relative h-6 w-11 shrink-0 rounded-full transition ${admin ? "bg-sky-500" : "bg-slate-400"}`}
           >
             <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${admin ? "left-0.5" : "left-[22px]"}`} />
@@ -155,6 +186,7 @@ export default function TopBar() {
       </div>
 
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+      {gateOpen && <AdminGateModal onUnlock={toAdmin} onClose={() => setGateOpen(false)} />}
     </header>
   );
 }

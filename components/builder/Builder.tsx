@@ -2,15 +2,17 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useBuilder } from "@/lib/store";
-import LayersPanel from "./LayersPanel";
 import PropertiesPanel from "./PropertiesPanel";
 
-// Canvas は dnd-kit を使う。dnd-kit の useSortable はモジュール内カウンタで
-// aria-describedby を採番するため SSR とクライアントで番号がズレ、ハイドレーション不一致になる。
-// ビルダーはクライアント専用ツールでSSRの必要がないので、Canvas はSSR無効で動的読み込みする。
+// Canvas / LayersPanel は dnd-kit を使う。dnd-kit の useSortable は SSR とクライアントで
+// aria の採番がズレてハイドレーション不一致になりうるため、SSR無効で動的読み込みする。
 const Canvas = dynamic(() => import("./Canvas"), {
   ssr: false,
   loading: () => <div className="flex-1 bg-slate-100" />,
+});
+const LayersPanel = dynamic(() => import("./LayersPanel"), {
+  ssr: false,
+  loading: () => <div className="w-64 shrink-0 border-r border-slate-200 bg-white" />,
 });
 
 // ビルダーの3ペイン：左＝レイヤー一覧 / 中央＝プレビュー / 右＝プロパティ編集。
@@ -24,7 +26,7 @@ export default function Builder() {
       const admin = st.mode === "admin"; // クライアントは構造変更不可（内容編集のみ）
       if (e.key === "Escape") { st.select(null); return; }
       if (!admin) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && st.selectedId) { e.preventDefault(); st.removeNode(st.selectedId); }
+      if ((e.key === "Delete" || e.key === "Backspace") && (st.selectedIds.length || st.selectedId)) { e.preventDefault(); st.removeSelected(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d" && st.selectedId) { e.preventDefault(); st.copyNode(); st.pasteNode(); }
     };
     window.addEventListener("keydown", onKey);

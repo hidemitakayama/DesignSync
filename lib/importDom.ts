@@ -157,11 +157,42 @@ function container(el: Element, cs: CSSStyleDeclaration, kids: SceneNode[], dept
   return node;
 }
 
+// computed の font-family（スタック）→ ビルダーのフォントid。一致しなければ未指定（継承）。
+function mapFontId(ff: string | undefined): string | undefined {
+  const s = (ff || "").toLowerCase();
+  // JP版を先に判定してから欧文版へ（"noto sans" は JP/欧文どちらにも含まれるため）
+  if (s.includes("noto serif jp")) return "serif";
+  if (s.includes("noto serif")) return "notoserif";
+  if (s.includes("noto sans jp")) return "sans";
+  if (s.includes("noto sans")) return "notosans";
+  if (s.includes("m plus rounded") || s.includes("mplus") || s.includes("m+plus")) return "rounded";
+  if (s.includes("zen kaku")) return "kaku";
+  if (s.includes("shippori")) return "mincho";
+  if (s.includes("inter")) return "inter";
+  return undefined;
+}
+
 function textAtom(el: Element, cs: CSSStyleDeclaration, text: string): AtomNode {
-  const node: AtomNode = {
-    id: iid("text"), type: "atom", atomType: "text", name: text.slice(0, 10) || "テキスト", text,
-    style: { color: toColor(cs.color), fontSize: Math.round(num(cs.fontSize)) || undefined, fontWeight: num(cs.fontWeight) || undefined, align: mapTextAlign(cs.textAlign) },
+  const style: AtomNode["style"] = {
+    color: toColor(cs.color), fontSize: Math.round(num(cs.fontSize)) || undefined,
+    fontWeight: num(cs.fontWeight) || undefined, align: mapTextAlign(cs.textAlign),
   };
+  // 行間（px→倍率）
+  const lhRaw = cs.lineHeight;
+  if (lhRaw && lhRaw !== "normal") {
+    const lhpx = num(lhRaw), fs = num(cs.fontSize);
+    if (lhpx > 0 && fs > 0) style.lineHeight = Math.round((lhpx / fs) * 100) / 100;
+  }
+  // 文字間隔（px）
+  if (cs.letterSpacing && cs.letterSpacing !== "normal") {
+    const ls = Math.round(num(cs.letterSpacing) * 100) / 100;
+    if (ls) style.letterSpacing = ls;
+  }
+  // フォント
+  const fid = mapFontId(cs.fontFamily); if (fid) style.fontFamily = fid;
+  // 改行の保持（white-space が pre 系なら改行を反映）
+  style.preserveBreaks = /pre/.test(cs.whiteSpace || "");
+  const node: AtomNode = { id: iid("text"), type: "atom", atomType: "text", name: text.slice(0, 10) || "テキスト", text, style };
   addSpacing(node, cs);
   return node;
 }

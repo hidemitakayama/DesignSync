@@ -22,6 +22,7 @@ export default function ImportSiteModal({ onClose }: { onClose: () => void }) {
         const r = await saveImagesToDrive(page); // 画像をDriveフォルダへ保存し drive:// 参照化
         if (r.fail > 0) window.alert(`画像 ${r.ok}件を保存、${r.fail}件は取得できませんでした（外部URLのCORS制限等）。取得できた分のみローカル化しています。`);
       }
+      useBuilder.getState().backupCurrentPage(); // ★ 置き換え前に現ページを自動保存
       useBuilder.setState({ page, selectedId: null, view: "builder" });
       onClose();
     } catch (e) {

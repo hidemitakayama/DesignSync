@@ -19,3 +19,22 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* =============================================================
+   レスポンシブ・グリッド（columns 指定のコンテナ）
+   コンテナクエリで「ページ幅（キャンバス/デバイス幅）」に応じて
+   列数を変える。PCでは3〜4列、SP幅では1列に自動で折り返す。
+   .ds-canvas を container にした要素の幅に反応する。
+   ============================================================= */
+.ds-canvas { container-type: inline-size; }
+.ds-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
+.ds-grid > * { min-width: 0; } /* グリッド子の最小幅を0にして確実に等幅・折り返し */
+@container (min-width: 520px) {
+  .ds-cols-2, .ds-cols-3, .ds-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 760px) {
+  .ds-cols-3, .ds-cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (min-width: 1000px) {
+  .ds-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

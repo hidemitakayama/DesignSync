@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { warnIfUnsynced } from "@/lib/uiStore";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { useStudio, orthoSnap, type Pt } from "@/lib/studioStore";
 import StudioElementView from "./StudioElementView";
@@ -15,6 +16,7 @@ export default function StudioCanvas() {
   const elements = useStudio((s) => s.elements);
   const selectedIds = useStudio((s) => s.selectedIds);
   const select = useStudio((s) => s.select);
+  const selectMany = useStudio((s) => s.selectMany);
   const tool = useStudio((s) => s.tool);
   const draft = useStudio((s) => s.draft);
   const penAddPoint = useStudio((s) => s.penAddPoint);
@@ -26,6 +28,7 @@ export default function StudioCanvas() {
   const innerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<Pt | null>(null);
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null); // 範囲ドラッグ選択
   const penMode = tool === "pen";
   const nodeMode = tool === "node";
   // 曲線ツールは「1つのパスだけ」を選んでいるときに編集対象にする
@@ -129,6 +132,34 @@ export default function StudioCanvas() {
     return { x: Math.round((e.clientX - r.left) / z), y: Math.round((e.clientY - r.top) / z) };
   };
 
+  // --- 範囲ドラッグ選択（マーキー）：背景をドラッグして囲んだ要素をまとめて選択 ---
+  const onBgPointerDown = (e: React.PointerEvent) => {
+    if (penMode) return;
+    if (e.button !== 0 || e.target !== e.currentTarget) return; // 要素上・左ボタン以外は無視
+    if (nodeMode) { select(null); return; } // パス編集中はマーキーしない
+    const p = toPoint(e);
+    innerRef.current?.setPointerCapture(e.pointerId);
+    setMarquee({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+    if (!(e.shiftKey || e.metaKey || e.ctrlKey)) select(null);
+  };
+  const onBgPointerMove = (e: React.PointerEvent) => {
+    if (penMode) setHover(toPoint(e));
+    if (marquee) { const p = toPoint(e); setMarquee({ x0: marquee.x0, y0: marquee.y0, x1: p.x, y1: p.y }); }
+  };
+  const onBgPointerUp = (e: React.PointerEvent) => {
+    if (!marquee) return;
+    const rx0 = Math.min(marquee.x0, marquee.x1), ry0 = Math.min(marquee.y0, marquee.y1);
+    const rx1 = Math.max(marquee.x0, marquee.x1), ry1 = Math.max(marquee.y0, marquee.y1);
+    if (rx1 - rx0 > 3 || ry1 - ry0 > 3) {
+      const ids = elements
+        .filter((el) => el.position.x < rx1 && el.position.x + el.size.width > rx0 && el.position.y < ry1 && el.position.y + el.size.height > ry0)
+        .map((el) => el.id);
+      selectMany(ids);
+    }
+    setMarquee(null);
+    try { innerRef.current?.releasePointerCapture(e.pointerId); } catch {}
+  };
+
   // シングルクリックで点追加（ダブルクリックの2打目 detail===2 は無視）
   const onPenClick = (e: React.MouseEvent) => {
     if (e.detail !== 1) return;
@@ -145,7 +176,7 @@ export default function StudioCanvas() {
   const previewTo = hover && last ? (draft?.ortho ? orthoSnap(last, hover) : hover) : null;
 
   return (
-    <div className="relative flex flex-1 flex-col overflow-hidden bg-slate-100">
+    <div className="relative flex flex-1 flex-col overflow-hidden bg-slate-100" onPointerDownCapture={warnIfUnsynced}>
       {penMode && (
         <div className="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 py-2 text-xs backdrop-blur">
           <span className="font-semibold text-sky-700">ペンツール</span>
@@ -180,11 +211,13 @@ export default function StudioCanvas() {
         <div style={{ width: CANVAS_W * zoom, height: CANVAS_H * zoom, position: "relative" }}>
           <div
             ref={innerRef}
-            // 背景クリックで選択解除（ペン中はしない）
-            onPointerDown={(e) => { if (!penMode && e.target === e.currentTarget) select(null); }}
+            // 背景ドラッグで範囲選択（マーキー）／ペン中は点追加
+            onPointerDown={onBgPointerDown}
+            onPointerMove={onBgPointerMove}
+            onPointerUp={onBgPointerUp}
+            onPointerCancel={onBgPointerUp}
             onClick={penMode ? onPenClick : undefined}
             onDoubleClick={penMode ? onPenDblClick : undefined}
-            onMouseMove={penMode ? (e) => setHover(toPoint(e)) : undefined}
             onMouseLeave={penMode ? () => setHover(null) : undefined}
             className="absolute left-0 top-0"
             style={{
@@ -210,6 +243,22 @@ export default function StudioCanvas() {
                 zoom={zoom}
               />
             ))}
+
+            {/* 範囲ドラッグ選択の矩形 */}
+            {marquee && (
+              <div
+                className="pointer-events-none absolute"
+                style={{
+                  left: Math.min(marquee.x0, marquee.x1),
+                  top: Math.min(marquee.y0, marquee.y1),
+                  width: Math.abs(marquee.x1 - marquee.x0),
+                  height: Math.abs(marquee.y1 - marquee.y0),
+                  background: "rgba(14,165,233,0.12)",
+                  border: "1px solid #0ea5e9",
+                  zIndex: 9999,
+                }}
+              />
+            )}
 
             {nodeTarget && <PathEditor el={nodeTarget} toPoint={toPoint} />}
 
