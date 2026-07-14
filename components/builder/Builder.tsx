@@ -16,7 +16,10 @@ const LayersPanel = dynamic(() => import("./LayersPanel"), {
 });
 
 // ビルダーの3ペイン：左＝レイヤー一覧 / 中央＝プレビュー / 右＝プロパティ編集。
+// クライアントにはレイヤー一覧を出さない（構造は触らせず、文字の編集だけしてもらう）。
 export default function Builder() {
+  const admin = useBuilder((s) => s.mode === "admin");
+
   // キーボード：Delete=削除 / Esc=選択解除 / ⌘D=複製（入力中は無効）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -35,7 +38,7 @@ export default function Builder() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      <LayersPanel />
+      {admin && <LayersPanel />}
       <Canvas />
       <PropertiesPanel />
     </div>

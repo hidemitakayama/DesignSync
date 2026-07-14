@@ -234,6 +234,10 @@ export default function PropertiesPanel() {
   const removeSelected = useBuilder((s) => s.removeSelected);
   const isSp = useUi((s) => s.previewDevice === "sp"); // SPプレビュー中はSP設定を編集
 
+  // クライアントは「ビルダー内の文字をクリックしたとき」だけ設定を出す。
+  // それ以外（未選択・画像・図形・コンテナ）ではパネルごと隠し、プレビューを広く使う。
+  if (!admin && !(node && isAtom(node) && node.atomType === "text")) return null;
+
   if (!node) {
     return (
       <aside className="w-72 shrink-0 border-l border-slate-200 bg-white p-4">
