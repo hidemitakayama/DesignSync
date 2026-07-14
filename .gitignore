@@ -46,6 +46,5 @@ next-env.d.ts
 /designsync-project*.bak
 /designsync-project_backup.json
 /manabill_top.html
-# 案件の素材・資料（画像アセットや配布資料）
-/public/minori-ai/
+# 配布資料（サービス資料PDF等）はリポジトリに入れない
 *.pdf

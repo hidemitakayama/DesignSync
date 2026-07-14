@@ -12,6 +12,27 @@ export interface ProjectFile {
   studio: { elements: StudioElement[] };
 }
 
+// 同梱の既定プロジェクト（public/designsync-seed.json）。
+// デプロイ先を初めて開いたブラウザは、これを既定として読み込む（＝クライアントにも同じテンプレートが見える）。
+export const SEED_PROJECT_URL = "/designsync-seed.json";
+
+// 既にデータを持っているブラウザ向け：足りないテンプレートだけを追加する（既存は一切上書きしない）。
+// 追加した件数を返す。
+export function mergeSeedTemplates(json: string): number {
+  let d: Partial<ProjectFile>;
+  try { d = JSON.parse(json) as Partial<ProjectFile>; } catch { return 0; }
+  const incoming = d.builder?.templates;
+  if (!Array.isArray(incoming) || !incoming.length) return 0;
+  const cur = useBuilder.getState();
+  const have = new Set(cur.templates.map((t) => t.id));
+  const add = incoming.filter((t) => t?.id && !have.has(t.id));
+  if (!add.length) return 0;
+  const templates = [...add, ...cur.templates];
+  bumpUid(cur.page, cur.assets, templates); // 追加分のIDに合わせて採番カウンタを進める
+  useBuilder.setState({ templates });
+  return add.length;
+}
+
 // 現在の全データをJSON文字列にする。page=PC版、spPage=SP版 を常に正規化して保存。
 export function serializeProject(): string {
   const b = useBuilder.getState();
