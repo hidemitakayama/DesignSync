@@ -7,6 +7,8 @@ import { buildRoseTemplate, ROSE_TEMPLATE_ID } from "./templateJukuRose";
 import { buildTealTemplate, TEAL_TEMPLATE_ID } from "./templateCorpTeal";
 import { buildUpShingakuTemplate, UPS_TEMPLATE_ID } from "./templateUpShingaku";
 import { buildManabillTemplate, MANABILL_TEMPLATE_ID } from "./templateManabill";
+import { buildStudyPowerTemplate, STUDYPOWER_TEMPLATE_ID } from "./templateStudyPower";
+import { buildNexoraTemplate, NEXORA_TEMPLATE_ID } from "./templateNexora";
 
 // --- カラーシステム（抑制した2色＋ニュートラル） ---
 const PRIMARY = "#15806a";   // ブランドグリーン
@@ -250,17 +252,19 @@ function buildPage(): Page {
 
 export const SEED_TEMPLATE_ID = "t-manabi-juku-lp";
 // 既定テンプレートのIDすべて（migrateで最新版に差し替える対象）
-export const SEED_TEMPLATE_IDS = [SEED_TEMPLATE_ID, ROSE_TEMPLATE_ID, TEAL_TEMPLATE_ID, UPS_TEMPLATE_ID, MANABILL_TEMPLATE_ID];
+export const SEED_TEMPLATE_IDS = [SEED_TEMPLATE_ID, ROSE_TEMPLATE_ID, TEAL_TEMPLATE_ID, UPS_TEMPLATE_ID, MANABILL_TEMPLATE_ID, STUDYPOWER_TEMPLATE_ID, NEXORA_TEMPLATE_ID];
 
 // 既定シードごとの意図した種別。
-// テンプレート＝まなびの森スクール／アオイ国語専科ゼミ／StackForce。
-// クライアント案件のサンプル＝アップ進学ゼミ／個別学習塾Manabill。
+// テンプレート＝まなびの森スクール／アオイ国語専科ゼミ／StackForce／NEXORA。
+// クライアント案件のサンプル＝アップ進学ゼミ／個別学習塾Manabill／個別指導塾スタディパワー。
 export const SEED_TEMPLATE_KIND: Record<string, TemplateKind> = {
   [SEED_TEMPLATE_ID]: "template",   // まなびの森スクール
   [ROSE_TEMPLATE_ID]: "template",   // アオイ国語専科ゼミ
   [TEAL_TEMPLATE_ID]: "template",   // StackForce
+  [NEXORA_TEMPLATE_ID]: "template", // NEXORA（ゲーム紹介LP）
   [UPS_TEMPLATE_ID]: "client",      // アップ進学ゼミ（クライアント案件）
   [MANABILL_TEMPLATE_ID]: "client", // 個別学習塾Manabill（クライアント案件）
+  [STUDYPOWER_TEMPLATE_ID]: "client", // 個別指導塾スタディパワー（クライアント案件）
 };
 // ユーザーが命名したテンプレート名（既定シードをリネームしたもの）。名前でも判定する。
 const DEFAULT_TEMPLATE_NAMES = new Set<string>(["エール進学ゼミ", "まなびの森スクール", "アオイ国語専科ゼミ", "StackForce", "StackForge"]);
@@ -275,6 +279,8 @@ export function classifyKind(t: { id: string; name?: string }): TemplateKind {
 export function seedTemplates(): PageTemplate[] {
   k = 0;
   const list: PageTemplate[] = [
+    buildNexoraTemplate(),
+    buildStudyPowerTemplate(),
     buildManabillTemplate(),
     buildUpShingakuTemplate(),
     { id: SEED_TEMPLATE_ID, name: "学習塾 ランディングLP（サンプル）", page: buildPage() },

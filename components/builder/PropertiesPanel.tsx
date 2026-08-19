@@ -4,10 +4,12 @@ import { Upload } from "lucide-react";
 import { useBuilder, findNode, type NodePatch } from "@/lib/store";
 import { uploadToPublic, currentSiteSlug, ancestorSection, sectionSlug } from "@/lib/publicUpload";
 import { type ContainerNode, type AtomNode, type SceneNode, type ItemProps, type FlexDirection, type JustifyContent, type AlignItems, type AlignSelf, type BgPatternKind, isContainer, isAtom } from "@/lib/types";
-import { baseColorOf, patternSize } from "@/lib/patterns";
+import { baseColorOf, patternSize, DEFAULT_OVERLAY_SPREAD, DEFAULT_BG_POS } from "@/lib/patterns";
+import { DEFAULT_IMG_POS, IMG_ZOOM_MIN, IMG_ZOOM_MAX } from "@/lib/imageCrop";
 import { FONTS } from "@/lib/fonts";
 import { warnIfUnsynced, useUi } from "@/lib/uiStore";
 import type { SpOverride } from "@/lib/types";
+import PanelRail, { PanelCollapseButton } from "./PanelRail";
 import { recolorSvg } from "@/lib/svg";
 import { svgToPoints } from "@/lib/pathedit";
 import { MaskControls } from "@/components/MaskControls";
@@ -44,7 +46,17 @@ function SvgPathControls({ node }: { node: AtomNode }) {
 
 // 画像を public/<サイト>/<セクション>/ へアップロードするボタン。保存先を事前表示する。
 // apply で「画像URLに入れる／背景画像に入れる」など反映先を切り替える。
-function ImageUpload({ nodeId, apply, label = "画像をアップロード" }: { nodeId: string; apply: (url: string) => void; label?: string }) {
+// 画像の実寸（naturalWidth/Height）を測る。枠の縦横比を画像に合わせて「切れない」ようにするため。
+function naturalSize(src: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function ImageUpload({ nodeId, apply, label = "画像をアップロード" }: { nodeId: string; apply: (url: string, size?: { w: number; h: number }) => void; label?: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const admin = useBuilder((s) => s.mode === "admin"); // クライアントはサーバー(public/)へ保存しない
@@ -59,7 +71,7 @@ function ImageUpload({ nodeId, apply, label = "画像をアップロード" }: {
     try {
       // クライアント中は一切書き出さないので、ブラウザ内だけで完結する data URL にする。
       const url = admin ? await uploadToPublic(f, nodeId) : await fileToDataUrl(f);
-      apply(url);
+      apply(url, (await naturalSize(url)) ?? undefined);
     }
     catch (err) { window.alert(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
@@ -167,6 +179,29 @@ const PATTERN_OPTIONS: { k: BgPatternKind | "none"; label: string }[] = [
 ];
 const DEFAULT_PATTERN_COLOR = "#dbe3f0";
 
+// 表示位置プリセット（9分割）。x/y は % で、0=左/上端・50=中央・100=右/下端。
+// 「切れて見えない部分」を寄せるための早見ボタン。細かい調整は下のスライダーで行う。
+// 背景画像（bgImage）と画像のトリミング（image atom）で共用する。
+const POS_PRESETS: { x: number; y: number; icon: string; label: string }[] = [
+  { x: 0, y: 0, icon: "↖", label: "左上を表示" },
+  { x: 50, y: 0, icon: "↑", label: "上側を表示" },
+  { x: 100, y: 0, icon: "↗", label: "右上を表示" },
+  { x: 0, y: 50, icon: "←", label: "左側を表示" },
+  { x: 50, y: 50, icon: "●", label: "中央（既定）" },
+  { x: 100, y: 50, icon: "→", label: "右側を表示" },
+  { x: 0, y: 100, icon: "↙", label: "左下を表示" },
+  { x: 50, y: 100, icon: "↓", label: "下側を表示" },
+  { x: 100, y: 100, icon: "↘", label: "右下を表示" },
+];
+
+// トリミング枠の縦横比プリセット。幅を保ったまま高さを合わせる（＝切り取る形を決める）。
+const ASPECTS: { label: string; ratio: number }[] = [
+  { label: "1:1", ratio: 1 },
+  { label: "4:3", ratio: 4 / 3 },
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "3:4", ratio: 3 / 4 },
+];
+
 // チェックボックス行。Field(=<label>) の中に別の<label>を入れると入れ子になり、
 // クリックが二重に伝わってトグルが相殺される（＝反応しないように見える）。
 // そのため見出しは<span>にして、ラベルは1つだけにする。
@@ -233,15 +268,25 @@ export default function PropertiesPanel() {
   const selectedCount = useBuilder((s) => s.selectedIds.length);
   const removeSelected = useBuilder((s) => s.removeSelected);
   const isSp = useUi((s) => s.previewDevice === "sp"); // SPプレビュー中はSP設定を編集
+  const rightOpen = useUi((s) => s.rightPanelOpen);
 
-  // クライアントは「ビルダー内の文字をクリックしたとき」だけ設定を出す。
-  // それ以外（未選択・画像・図形・コンテナ）ではパネルごと隠し、プレビューを広く使う。
-  if (!admin && !(node && isAtom(node) && node.atomType === "text")) return null;
+  // 畳んでいるときは細いレールだけ残す。開閉ボタンは常に画面上に出しておく（管理者/クライアント共通）。
+  if (!rightOpen) return <PanelRail side="right" label="設定" />;
 
-  if (!node) {
+  // クライアントは「ビルダー内の文字をクリックしたとき」だけ中身を出す。
+  // それ以外（未選択・画像・図形・コンテナ）は案内文だけにして、プレビューの邪魔をしない。
+  const clientIdle = !admin && !(node && isAtom(node) && node.atomType === "text");
+
+  if (!node || clientIdle) {
     return (
-      <aside className="w-72 shrink-0 border-l border-slate-200 bg-white p-4">
-        <p className="text-sm text-slate-400">要素を選ぶと、ここで編集できます。</p>
+      <aside className="w-72 shrink-0 border-l border-slate-200 bg-white">
+        <div className="flex items-center gap-0.5 border-b border-slate-100 px-3 py-2.5">
+          <PanelCollapseButton side="right" />
+          <p className="text-xs font-bold text-slate-500">設定</p>
+        </div>
+        <p className="p-4 text-sm text-slate-400">
+          {admin ? "要素を選ぶと、ここで編集できます。" : "文字をクリックすると、ここで編集できます。"}
+        </p>
       </aside>
     );
   }
@@ -262,9 +307,13 @@ export default function PropertiesPanel() {
 
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white" onPointerDownCapture={warnIfUnsynced}>
-      <div className="border-b border-slate-100 px-4 py-2.5">
-        <p className="text-xs font-bold text-slate-500">設定</p>
-        <p className="mt-0.5 text-[11px] text-slate-400">{typeLabel}</p>
+      {/* ヘッダーは sticky。設定項目が多くスクロールしても、畳むボタンは常に見えるようにする。 */}
+      <div className="sticky top-0 z-20 flex items-center gap-1 border-b border-slate-100 bg-white px-3 py-2.5">
+        <PanelCollapseButton side="right" />
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-slate-500">設定</p>
+          <p className="mt-0.5 truncate text-[11px] text-slate-400">{typeLabel}</p>
+        </div>
       </div>
 
       {admin && selectedCount > 1 && (
@@ -394,7 +443,32 @@ const SHADOWS: Record<string, string> = {
   md: "0 4px 6px -1px rgba(16,24,40,0.08), 0 2px 4px -2px rgba(16,24,40,0.06)",
   lg: "0 10px 15px -3px rgba(16,24,40,0.08), 0 4px 6px -4px rgba(16,24,40,0.05)",
 };
-const shadowKey = (v?: string): string => Object.keys(SHADOWS).find((k) => SHADOWS[k] === (v ?? "")) ?? "none";
+// 影の現在値 → プリセットのキー。プリセットに一致しない独自の影（テンプレート由来の
+// グロー等）は "custom" を返す。以前はここで "none" に丸めていたため、実際は影があるのに
+// セレクトが「なし」を表示し、「なし」を選び直しても値が変わらず onChange が発火しない
+// （＝一度「弱」にしてから「なし」にしないと消えない）不具合になっていた。
+// 斜めカット（clip-path）のプリセット。Flexboxでは作れない外形をここで与える。
+// % 指定なので、要素の大きさが変わっても角度が保たれる。
+const CLIPS: Record<string, string> = {
+  none: "",
+  slantR: "polygon(0 0, 100% 0, 88% 100%, 0 100%)",   // 右端が斜め（下ほど短い）
+  slantRUp: "polygon(0 0, 88% 0, 100% 100%, 0 100%)", // 右端が斜め（下ほど長い）
+  slantL: "polygon(12% 0, 100% 0, 100% 100%, 0 100%)",// 左端が斜め（下ほど長い）
+  slantLUp: "polygon(0 0, 100% 0, 100% 100%, 12% 100%)", // 左端が斜め（下ほど短い）
+  band: "polygon(0 6%, 100% 0, 100% 94%, 0 100%)",    // 上下とも斜めの帯
+  cornerTR: "polygon(0 0, 94% 0, 100% 22%, 100% 100%, 0 100%)", // 右上の角を落とす
+};
+const CLIP_CUSTOM = "custom";
+const clipKey = (v?: string): string => {
+  if (!v) return "none";
+  return Object.keys(CLIPS).find((k) => k !== "none" && CLIPS[k] === v) ?? CLIP_CUSTOM;
+};
+
+const SHADOW_CUSTOM = "custom";
+const shadowKey = (v?: string): string => {
+  if (!v) return "none";
+  return Object.keys(SHADOWS).find((k) => k !== "none" && SHADOWS[k] === v) ?? SHADOW_CUSTOM;
+};
 
 function ContainerEditor({ node, admin, set }: { node: ContainerNode; admin: boolean; set: (p: NodePatch) => void }) {
   if (!admin) {
@@ -435,7 +509,7 @@ function ContainerEditor({ node, admin, set }: { node: ContainerNode; admin: boo
         <Field label="幅" hint="px・0＝自動">
           <NumberInput value={node.width ?? 0} onChange={(v) => set({ width: v > 0 ? v : undefined })} />
         </Field>
-        <Field label="高さ（最小）" hint={node.fullHeight ? "全画面が優先" : "px・0＝自動"}>
+        <Field label="高さ（最小）" hint={node.fullHeight ? "全画面が優先" : node.type === "section" ? "px・0＝自動／下端をドラッグでも変更" : "px・0＝自動"}>
           <NumberInput value={node.minHeight ?? 0} onChange={(v) => set({ minHeight: v > 0 ? v : undefined })} />
         </Field>
       </div>
@@ -495,21 +569,98 @@ function ContainerEditor({ node, admin, set }: { node: ContainerNode; admin: boo
       {admin && <ImageUpload nodeId={node.id} apply={(url) => set({ bgImage: { ...(node.bgImage ?? {}), src: url } })} label="背景画像をアップロード" />}
       {node.bgImage?.src && (
         <>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="合わせ方" hint="background-size">
-              <Select
-                value={node.bgImage.fit ?? "cover"}
-                onChange={(v) => set({ bgImage: { ...node.bgImage!, fit: v } })}
-                options={[{ v: "cover", label: "全面を覆う" }, { v: "contain", label: "全体を収める" }]}
+          <Field label="合わせ方" hint="background-size">
+            <Select
+              value={node.bgImage.fit ?? "cover"}
+              onChange={(v) => set({ bgImage: { ...node.bgImage!, fit: v } })}
+              options={[{ v: "cover", label: "全面を覆う" }, { v: "contain", label: "全体を収める" }]}
+            />
+          </Field>
+          {/* 表示位置：cover で切れる部分を寄せる。まず9分割ボタン、細かくはスライダーで。 */}
+          <Field label="表示位置" hint="background-position・画像のどこを見せるか">
+            <div className="grid grid-cols-3 gap-1">
+              {POS_PRESETS.map((p) => {
+                const active = (node.bgImage!.posX ?? DEFAULT_BG_POS) === p.x && (node.bgImage!.posY ?? DEFAULT_BG_POS) === p.y;
+                return (
+                  <button
+                    key={`${p.x}-${p.y}`}
+                    onClick={() => set({ bgImage: { ...node.bgImage!, posX: p.x === DEFAULT_BG_POS ? undefined : p.x, posY: p.y === DEFAULT_BG_POS ? undefined : p.y } })}
+                    title={p.label}
+                    aria-label={p.label}
+                    className={`rounded-md border py-1.5 text-xs font-semibold transition ${active ? "border-sky-500 bg-sky-50 text-sky-700" : "border-slate-300 text-slate-500 hover:border-sky-400 hover:text-sky-600"}`}
+                  >
+                    {p.icon}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+          {/* 微調整：0=上端/左端・50=中央・100=下端/右端。「中央より少し上」は 35〜40 あたり。 */}
+          <Field label="上下の位置" hint="%・0=上端 / 50=中央 / 100=下端">
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min={0} max={100} step={5}
+                value={node.bgImage.posY ?? DEFAULT_BG_POS}
+                onChange={(e) => { const v = Number(e.target.value); set({ bgImage: { ...node.bgImage!, posY: v === DEFAULT_BG_POS ? undefined : v } }); }}
+                className="h-1.5 flex-1 accent-sky-500"
               />
-            </Field>
-            <Field label="暗くする" hint="%・文字を読みやすく">
+              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{node.bgImage.posY ?? DEFAULT_BG_POS}%</span>
+            </div>
+          </Field>
+          <Field label="左右の位置" hint="%・0=左端 / 50=中央 / 100=右端">
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min={0} max={100} step={5}
+                value={node.bgImage.posX ?? DEFAULT_BG_POS}
+                onChange={(e) => { const v = Number(e.target.value); set({ bgImage: { ...node.bgImage!, posX: v === DEFAULT_BG_POS ? undefined : v } }); }}
+                className="h-1.5 flex-1 accent-sky-500"
+              />
+              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{node.bgImage.posX ?? DEFAULT_BG_POS}%</span>
+            </div>
+          </Field>
+          {/* 明暗の調整：黒/白を重ねて写真の上の文字を読みやすくする。片方だけ使うのが基本。 */}
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="暗くする" hint="%・黒を重ねる（白文字向け）">
               <NumberInput
                 value={Math.round((node.bgImage.overlay ?? 0) * 100)}
                 onChange={(v) => { const o = Math.max(0, Math.min(100, v)) / 100; set({ bgImage: { ...node.bgImage!, overlay: o > 0 ? o : undefined } }); }}
               />
             </Field>
+            <Field label="明るくする" hint="%・白を重ねる（濃い文字向け）">
+              <NumberInput
+                value={Math.round((node.bgImage.overlayLight ?? 0) * 100)}
+                onChange={(v) => { const o = Math.max(0, Math.min(100, v)) / 100; set({ bgImage: { ...node.bgImage!, overlayLight: o > 0 ? o : undefined } }); }}
+              />
+            </Field>
           </div>
+          {/* かけ方：全面か、片側だけ濃いグラデーションか（FVの左側を落として白文字を載せる等）。 */}
+          <Field label="明暗のかけ方" hint="片側を指定＝その辺が100%→反対側で0%">
+            <Select
+              value={node.bgImage.overlayDir ?? "all"}
+              onChange={(v) => set({ bgImage: { ...node.bgImage!, overlayDir: v === "all" ? undefined : v } })}
+              options={[
+                { v: "all", label: "全面（均一）" },
+                { v: "left", label: "左から（左が濃い）" },
+                { v: "right", label: "右から（右が濃い）" },
+                { v: "top", label: "上から（上が濃い）" },
+                { v: "bottom", label: "下から（下が濃い）" },
+              ]}
+            />
+          </Field>
+          {/* 適用幅：方向を指定したときだけ効く。50%＝画面中央で0%になる。 */}
+          {node.bgImage.overlayDir && node.bgImage.overlayDir !== "all" && (
+            <Field label="グラデーションの幅" hint="%・0%になりきる位置（50＝中央）">
+              <div className="flex items-center gap-2">
+                <input
+                  type="range" min={5} max={100} step={5}
+                  value={node.bgImage.overlaySpread ?? DEFAULT_OVERLAY_SPREAD}
+                  onChange={(e) => { const v = Number(e.target.value); set({ bgImage: { ...node.bgImage!, overlaySpread: v === DEFAULT_OVERLAY_SPREAD ? undefined : v } }); }}
+                  className="h-1.5 flex-1 accent-sky-500"
+                />
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{node.bgImage.overlaySpread ?? DEFAULT_OVERLAY_SPREAD}%</span>
+              </div>
+            </Field>
+          )}
           <Field label="拡大縮小" hint="50〜250%・100=等倍">
             <div className="flex items-center gap-2">
               <input
@@ -533,12 +684,48 @@ function ContainerEditor({ node, admin, set }: { node: ContainerNode; admin: boo
           </div>
         </>
       )}
+      {/* 重なり順：はみ出し配置したときの前後関係（立ち絵をサムネイルの背後に回す等） */}
+      <Field label="重なり順" hint="大きいほど手前・0＝指定なし">
+        <NumberInput value={node.zIndex ?? 0} onChange={(v) => set({ zIndex: v !== 0 ? v : undefined })} />
+      </Field>
+      {/* はみ出し：立ち絵などを負のマージンで大きく出し、枠の端で断ち切る用 */}
+      <Field label="はみ出した中身" hint="overflow・負の余白で外に出した要素の扱い">
+        <Select
+          value={node.overflow ?? "visible"}
+          onChange={(v) => set({ overflow: v === "visible" ? undefined : v })}
+          options={[{ v: "visible", label: "そのまま見せる" }, { v: "hidden", label: "枠で切り取る" }]}
+        />
+      </Field>
+      {/* 斜めカット：Flexboxでは作れない外形を clip-path で与える（ゲームLP等の斜め分割） */}
+      <Field label="斜めカット" hint="clip-path・角度は%指定で可変">
+        <Select
+          value={clipKey(node.clipPath)}
+          onChange={(v) => set({ clipPath: v === CLIP_CUSTOM ? node.clipPath : CLIPS[v] || undefined })}
+          options={[
+            { v: "none", label: "なし" },
+            { v: "slantR", label: "右端を斜めに（下ほど短い）" },
+            { v: "slantRUp", label: "右端を斜めに（下ほど長い）" },
+            { v: "slantL", label: "左端を斜めに（下ほど長い）" },
+            { v: "slantLUp", label: "左端を斜めに（下ほど短い）" },
+            { v: "band", label: "上下とも斜めの帯" },
+            { v: "cornerTR", label: "右上の角を落とす" },
+            ...(clipKey(node.clipPath) === CLIP_CUSTOM ? [{ v: CLIP_CUSTOM, label: "カスタム（テンプレート指定）" }] : []),
+          ]}
+        />
+      </Field>
       <Field label="枠線の太さ" hint="px・0＝なし"><NumberInput value={node.borderWidth ?? 0} onChange={(v) => set({ borderWidth: v > 0 ? v : undefined })} /></Field>
       <Field label="枠線の色"><ColorInput value={node.borderColor} onChange={(v) => set({ borderColor: v })} onClear={() => set({ borderColor: undefined })} /></Field>
       <Field label="影" hint="box-shadow">
-        <Select value={shadowKey(node.boxShadow)} onChange={(v) => set({ boxShadow: SHADOWS[v] || undefined })} options={[
-          { v: "none", label: "なし" }, { v: "sm", label: "弱" }, { v: "md", label: "中" }, { v: "lg", label: "強" },
-        ]} />
+        <Select
+          value={shadowKey(node.boxShadow)}
+          key="shadow"
+          onChange={(v) => set({ boxShadow: v === SHADOW_CUSTOM ? node.boxShadow : SHADOWS[v] || undefined })}
+          options={[
+            { v: "none", label: "なし" }, { v: "sm", label: "弱" }, { v: "md", label: "中" }, { v: "lg", label: "強" },
+            // プリセット外の影のときだけ選択肢に出す（選ぶと現状維持。「なし」を選べば消える）
+            ...(shadowKey(node.boxShadow) === SHADOW_CUSTOM ? [{ v: SHADOW_CUSTOM, label: "カスタム（テンプレート指定）" }] : []),
+          ]}
+        />
       </Field>
     </>
   );
@@ -562,6 +749,14 @@ function AtomEditor({ node, admin, set }: { node: AtomNode; admin: boolean; set:
                 options={[{ v: "", label: "標準（指定なし）" }, ...FONTS.map((f) => ({ v: f.id as string, label: f.label }))]}
               />
             </Field>
+            {/* 欧文専用フォントは日本語グリフを持たないため、和文だけ見た目が変わらない。
+                「反映されない」と誤解されやすいので、選択中は理由を明示する。 */}
+            {FONTS.find((f) => f.id === st.fontFamily)?.latinOnly && (
+              <p className="-mt-1 rounded-md bg-amber-50 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-700 ring-1 ring-amber-100">
+                このフォントは<strong className="font-bold">欧文専用</strong>です。英数字だけに効き、日本語は標準ゴシック／明朝で表示されます。
+                日本語にも効かせたい場合は「メカ」「重厚」「見出し」の各フォントをお使いください。
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <Field label="文字サイズ" hint="px"><NumberInput value={st.fontSize} onChange={(v) => set({ style: { ...st, fontSize: v } })} /></Field>
               <Field label="文字の太さ">
@@ -606,15 +801,121 @@ function AtomEditor({ node, admin, set }: { node: AtomNode; admin: boolean; set:
     return (
       <>
         <Field label="画像URL"><TextInput value={node.src ?? ""} onChange={(v) => set({ src: v })} /></Field>
-        {admin && <ImageUpload nodeId={node.id} apply={(url) => set({ src: url })} />}
+        {/* アップロード時は画像の実寸から枠の縦横比を合わせる。
+            既定は object-fit:cover なので、比率が合っていないとロゴや切り抜き（透過PNG）の
+            端が切り落とされてしまう。合わせておけば透過部分もそのまま活きる。 */}
+        {admin && (
+          <ImageUpload
+            nodeId={node.id}
+            apply={(url, size) => {
+              if (!size || !size.w || !size.h) { set({ src: url }); return; }
+              const w = node.width ?? 240;
+              set({ src: url, width: w, height: Math.max(1, Math.round((w * size.h) / size.w)) });
+            }}
+          />
+        )}
         <Field label="画像の説明" hint="代替テキスト"><TextInput value={node.alt ?? ""} onChange={(v) => set({ alt: v })} /></Field>
         {admin && (
           <>
             <GroupTitle>大きさ・見た目</GroupTitle>
+            <Field label="枠への収め方" hint="透過ロゴ・切り抜きは「全体を収める」">
+              <Select
+                value={node.fit ?? "cover"}
+                onChange={(v) => set({ fit: v === "cover" ? undefined : v })}
+                options={[{ v: "cover", label: "枠を埋める（はみ出しは切る）" }, { v: "contain", label: "全体を収める（切らない）" }]}
+              />
+            </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="幅" hint="px"><NumberInput value={node.width} onChange={(v) => set({ width: v })} /></Field>
               <Field label="高さ" hint="px"><NumberInput value={node.height} onChange={(v) => set({ height: v })} /></Field>
             </div>
+
+            {/* トリミング：枠の形（比率）→ 見せる位置 → 寄り（拡大）の順で決める。
+                「枠を埋める」ときだけ実際に切り取られるので、cover でない場合は注意書きを出す。 */}
+            <GroupTitle>トリミング（切り抜き）</GroupTitle>
+            {(node.fit ?? "cover") !== "cover" && (
+              <p className="rounded-md bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-700">
+                「全体を収める」では画像が切られません。トリミングするには上の「枠への収め方」を<b>枠を埋める</b>にしてください。
+              </p>
+            )}
+            <Field label="枠の比率" hint="幅はそのまま・高さを合わせる">
+              <div className="grid grid-cols-4 gap-1">
+                {ASPECTS.map((a) => {
+                  const cur = node.width && node.height ? node.width / node.height : 0;
+                  const active = cur > 0 && Math.abs(cur - a.ratio) < 0.02;
+                  return (
+                    <button
+                      key={a.label}
+                      onClick={() => { const w = node.width ?? 240; set({ width: w, height: Math.max(1, Math.round(w / a.ratio)) }); }}
+                      className={`rounded-md border py-1.5 text-xs font-semibold tabular-nums transition ${active ? "border-sky-500 bg-sky-50 text-sky-700" : "border-slate-300 text-slate-600 hover:border-sky-400 hover:text-sky-600"}`}
+                    >
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="表示位置" hint="object-position・枠に対して画像のどこを見せるか">
+              <div className="grid grid-cols-3 gap-1">
+                {POS_PRESETS.map((p) => {
+                  const active = (node.posX ?? DEFAULT_IMG_POS) === p.x && (node.posY ?? DEFAULT_IMG_POS) === p.y;
+                  return (
+                    <button
+                      key={`${p.x}-${p.y}`}
+                      onClick={() => set({ posX: p.x === DEFAULT_IMG_POS ? undefined : p.x, posY: p.y === DEFAULT_IMG_POS ? undefined : p.y })}
+                      title={p.label}
+                      aria-label={p.label}
+                      className={`rounded-md border py-1.5 text-xs font-semibold transition ${active ? "border-sky-500 bg-sky-50 text-sky-700" : "border-slate-300 text-slate-500 hover:border-sky-400 hover:text-sky-600"}`}
+                    >
+                      {p.icon}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="上下の位置" hint="%・0=上端 / 50=中央 / 100=下端">
+              <div className="flex items-center gap-2">
+                <input
+                  type="range" min={0} max={100} step={5}
+                  value={node.posY ?? DEFAULT_IMG_POS}
+                  onChange={(e) => { const v = Number(e.target.value); set({ posY: v === DEFAULT_IMG_POS ? undefined : v }); }}
+                  className="h-1.5 flex-1 accent-sky-500"
+                />
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{node.posY ?? DEFAULT_IMG_POS}%</span>
+              </div>
+            </Field>
+            <Field label="左右の位置" hint="%・0=左端 / 50=中央 / 100=右端">
+              <div className="flex items-center gap-2">
+                <input
+                  type="range" min={0} max={100} step={5}
+                  value={node.posX ?? DEFAULT_IMG_POS}
+                  onChange={(e) => { const v = Number(e.target.value); set({ posX: v === DEFAULT_IMG_POS ? undefined : v }); }}
+                  className="h-1.5 flex-1 accent-sky-500"
+                />
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{node.posX ?? DEFAULT_IMG_POS}%</span>
+              </div>
+            </Field>
+            <Field label="寄り（拡大）" hint="100〜400%・表示位置を軸に拡大して切る">
+              <div className="flex items-center gap-2">
+                <input
+                  type="range" min={IMG_ZOOM_MIN * 100} max={IMG_ZOOM_MAX * 100} step={5}
+                  value={Math.round((node.zoom ?? 1) * 100)}
+                  onChange={(e) => { const v = Number(e.target.value); set({ zoom: v === 100 ? undefined : v / 100 }); }}
+                  className="h-1.5 flex-1 accent-sky-500"
+                />
+                <span className="w-11 shrink-0 text-right text-xs tabular-nums text-slate-500">{Math.round((node.zoom ?? 1) * 100)}%</span>
+              </div>
+            </Field>
+            {(node.posX != null || node.posY != null || node.zoom != null) && (
+              <button
+                onClick={() => set({ posX: undefined, posY: undefined, zoom: undefined })}
+                className="rounded-md border border-slate-300 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-900"
+              >
+                トリミングをリセット（中央・等倍）
+              </button>
+            )}
+
+            <GroupTitle>その他</GroupTitle>
             <CheckRow label="影をつける" caption="ドロップシャドウのオン/オフ" checked={!!node.boxShadow} onChange={(v) => set({ boxShadow: v ? SHADOWS.md : undefined })} />
             <MaskControls shape={node.maskShape} svg={node.maskSvg} onChange={(m) => set(m)} />
           </>

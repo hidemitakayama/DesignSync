@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { GOOGLE_FONTS_HREF } from "@/lib/fonts";
+import { GOOGLE_FONTS_CORE_HREF } from "@/lib/fonts";
+import FontLoader from "@/components/FontLoader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,7 +14,8 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// テキストで選べる日本語フォントは Google Fonts を <link> で読み込む（ブラウザ側で取得）。
+// テキストで選べるフォントは Google Fonts を <link> で読み込む（ブラウザ側で取得）。
+// ここでは既定フォントだけを読み、残りは FontLoader が「使っているぶんだけ」読み足す。
 // next/font はビルド時にフォント実体を取得するため、この環境では使えない。URL は lib/fonts.ts で共用。
 
 export const metadata: Metadata = {
@@ -34,9 +36,12 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link rel="stylesheet" href={GOOGLE_FONTS_HREF} />
+        <link rel="stylesheet" href={GOOGLE_FONTS_CORE_HREF} />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <FontLoader />
+        {children}
+      </body>
     </html>
   );
 }

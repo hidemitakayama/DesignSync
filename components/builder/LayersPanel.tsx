@@ -9,6 +9,7 @@ import { useUi } from "@/lib/uiStore";
 import { type SceneNode, isContainer } from "@/lib/types";
 import SvgPicker from "./SvgPicker";
 import ShapePicker from "./ShapePicker";
+import { PanelCollapseButton } from "./PanelRail";
 import { Square } from "lucide-react";
 
 // ドラッグ中の状態を全レイヤーへ配る（何を掴んで・どこに落ちるか）
@@ -211,7 +212,10 @@ export default function LayersPanel() {
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
       <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
-        <p className="text-xs font-bold text-slate-500">レイヤー</p>
+        <div className="flex min-w-0 items-center gap-0.5">
+          <PanelCollapseButton side="left" />
+          <p className="truncate text-xs font-bold text-slate-500">レイヤー</p>
+        </div>
         {admin && (
           <div className="flex items-center gap-1.5">
             <button

@@ -2,7 +2,9 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useBuilder } from "@/lib/store";
+import { useUi } from "@/lib/uiStore";
 import PropertiesPanel from "./PropertiesPanel";
+import PanelRail from "./PanelRail";
 
 // Canvas / LayersPanel は dnd-kit を使う。dnd-kit の useSortable は SSR とクライアントで
 // aria の採番がズレてハイドレーション不一致になりうるため、SSR無効で動的読み込みする。
@@ -19,6 +21,9 @@ const LayersPanel = dynamic(() => import("./LayersPanel"), {
 // クライアントにはレイヤー一覧を出さない（構造は触らせず、文字の編集だけしてもらう）。
 export default function Builder() {
   const admin = useBuilder((s) => s.mode === "admin");
+  // 左パネルは畳んでいる間 LayersPanel 自体を読み込まない（重い dnd-kit を無駄に載せない）。
+  // 右パネルは「クライアントは文字選択時のみ表示」という条件を持つので、開閉は本体側で判断する。
+  const leftOpen = useUi((s) => s.leftPanelOpen);
 
   // キーボード：Delete=削除 / Esc=選択解除 / ⌘D=複製（入力中は無効）。
   useEffect(() => {
@@ -38,7 +43,7 @@ export default function Builder() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {admin && <LayersPanel />}
+      {admin && (leftOpen ? <LayersPanel /> : <PanelRail side="left" label="レイヤー" />)}
       <Canvas />
       <PropertiesPanel />
     </div>

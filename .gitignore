@@ -48,3 +48,4 @@ next-env.d.ts
 /manabill_top.html
 # 配布資料（サービス資料PDF等）はリポジトリに入れない
 *.pdf
+/designsync-project.backup-*.json

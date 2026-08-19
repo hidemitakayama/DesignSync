@@ -7,6 +7,7 @@ import { wireHistory } from "./undoable";
 import { guardedStorage, setPersistWritable } from "./persistGuard";
 import { seedTemplates, classifyKind, SEED_TEMPLATE_KIND } from "./templateSeed";
 import { svgToPoints, pointsToShapeSvg, colorOfSvg } from "./pathedit";
+import { adaptPageToSp } from "./pcToSp";
 import {
   type Page,
   type SceneNode,
@@ -147,24 +148,28 @@ const nid = (prefix: string) => `n${++uid}-${prefix}`;
 // コピー＆ペースト用のクリップボード（アプリ内・保存しない）
 let builderClipboard: SceneNode | null = null;
 
+// 入れ子の値（style / runs / points / bgPattern / bgImage / sp など）まで実体を作り直す。
+// ★浅いコピーだと、PC版とSP版がこれらのオブジェクトを共有してしまい、
+//   SP版の文字色や余白を直すとPC版まで一緒に変わる（＝別ページのはずなのに連動する）。
+const deepCopy = <T>(v: T): T =>
+  (typeof structuredClone === "function" ? structuredClone(v) : (JSON.parse(JSON.stringify(v)) as T));
+
 // ノード（サブツリー）を新しいIDで複製する
 function cloneNodeNewIds(n: SceneNode): SceneNode {
-  if (isContainer(n)) return { ...n, id: nid(n.type), children: n.children.map(cloneNodeNewIds) };
-  return { ...n, id: nid(n.atomType) };
+  if (isContainer(n)) {
+    const { children, ...rest } = n;
+    return { ...deepCopy(rest), id: nid(n.type), children: children.map(cloneNodeNewIds) };
+  }
+  return { ...deepCopy(n), id: nid(n.atomType) };
 }
 
 // ページを新IDで複製（別デバイス版の作成に使う）
 function clonePage(p: Page, name: string): Page {
   return { id: nid("page"), name, children: p.children.map(cloneNodeNewIds) as ContainerNode[] };
 }
-// レスポンシブ用の上書き(sp/hiddenPc)を全ノードから除去（独立SPページはクリーンに）
-function stripResponsive(nodes: SceneNode[]): void {
-  for (const n of nodes) {
-    delete (n as { sp?: unknown }).sp;
-    delete (n as { hiddenPc?: unknown }).hiddenPc;
-    if (isContainer(n)) stripResponsive(n.children);
-  }
-}
+// PC版を元にSP版のページを作る（複製 → 390px向けに自動変換）。
+// 変換内容は lib/pcToSp.ts（横並び→縦積み・余白と文字の縮小・自由配置の座標換算など）。
+const makeSpPage = (pc: Page): Page => adaptPageToSp(clonePage(pc, `${pc.name.replace(/（SP）$/, "")}（SP）`));
 
 // ---- 自動バックアップ（ページ全置換の前に現ページを退避）------------------------
 // テンプレ適用・初期化など「今のページを丸ごと置き換える」操作の直前に呼び、
@@ -502,7 +507,8 @@ interface BuilderState {
   page: Page; // 現在編集中のページ（editing に応じて PC版 / SP版）
   altPage: Page | null; // 反対デバイスのページ（編集中でない方）。SP版を作ると入る。
   editing: "pc" | "sp"; // どちらのデバイス版を編集しているか
-  setEditing: (target: "pc" | "sp") => void; // PC/SP版の編集を切替（無ければSP版を複製生成）
+  setEditing: (target: "pc" | "sp") => void; // PC/SP版の編集を切替（無ければPC版から自動生成）
+  rebuildSpFromPc: () => void; // SP版をPC版から作り直す（今のSP版は破棄・直前は自動保存へ）
   selectedId: string | null; // 主選択（プロパティ編集の対象）
   selectedIds: string[]; // 複数選択（主選択を含む）
   mode: Mode;
@@ -796,16 +802,25 @@ export const useBuilder = create<BuilderState>()(
     set((s) => ({ templates: s.templates.filter((t) => t.id !== id), sourceTemplateId: s.sourceTemplateId === id ? null : s.sourceTemplateId })),
   backupCurrentPage: () => set((s) => { const { pc, sp } = pcSpOf(s); return { templates: withAutoBackup(s.templates, pc, sp) }; }),
   // PC/SP版の編集を切替。page と altPage を入れ替えるだけ（編集アクションは常に page を対象）。
-  // まだSP版が無ければ、現ページを複製してSP版を新規作成（上書きは外してクリーンに）。
+  // まだSP版が無ければ、PC版を元にSP版を自動生成する（縦積み化・余白と文字の縮小まで済んだ下書き）。
   setEditing: (target) =>
     set((s) => {
       if (s.editing === target) return s;
-      let alt = s.altPage;
-      if (!alt) {
-        alt = clonePage(s.page, target === "sp" ? `${s.page.name}（SP）` : s.page.name.replace(/（SP）$/, ""));
-        if (target === "sp") stripResponsive(alt.children);
-      }
+      const alt = s.altPage ?? (target === "sp" ? makeSpPage(s.page) : clonePage(s.page, s.page.name.replace(/（SP）$/, "")));
       return { page: alt, altPage: s.page, editing: target, selectedId: null, selectedIds: [] };
+    }),
+
+  // SP版をPC版から作り直す（今のSP版の編集内容は破棄。直前の状態は自動保存テンプレに退避する）。
+  rebuildSpFromPc: () =>
+    set((s) => {
+      const { pc, sp } = pcSpOf(s);
+      if (!pc?.children?.length) return s;
+      const next = makeSpPage(pc);
+      const templates = withAutoBackup(s.templates, pc, sp);
+      // SP編集中なら作業ページを差し替え、PC編集中なら裏に持っているSP版を差し替える。
+      return s.editing === "sp"
+        ? { page: next, templates, selectedId: null, selectedIds: [] }
+        : { altPage: next, templates };
     }),
 
   resetAll: () =>

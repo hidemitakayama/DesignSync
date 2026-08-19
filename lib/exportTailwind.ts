@@ -6,10 +6,11 @@
 //  - snap     : 任意値[..]を可能ならTailwindスケール（p-16 等）へ寄せる
 
 import { type Page, type SceneNode, type AtomNode, isContainer, isAtom } from "./types";
-import { fontCss, GOOGLE_FONTS_HREF } from "./fonts";
+import { fontCss, googleFontsHref, usedFontIds } from "./fonts";
 import { svgScalable } from "./svg";
 import { sectionPadTwClasses } from "./layout";
 import { resolveBackground } from "./patterns";
+import { cropPosition, cropZoom, hasCropPos, isCropZoomed } from "./imageCrop";
 
 export interface TwOpts { jsx: boolean; snap: boolean; sections: boolean; tokens: Record<string, string> | null; nextImage: boolean }
 
@@ -84,6 +85,9 @@ function attrsOf(node: SceneNode, o: TwOpts, basisOverride?: string): { cls: str
     if (node.radius) cls.push(roundedClass(node.radius, o.snap));
     if (node.borderWidth) { cls.push(`border-[${node.borderWidth}px]`); const bc = colorClass("border", node.borderColor ?? "#e5e7eb", o.tokens); if (bc) cls.push(bc); else style["borderColor"] = node.borderColor ?? "#e5e7eb"; }
     if (node.boxShadow) style["boxShadow"] = node.boxShadow;
+    if (node.clipPath) style["clipPath"] = node.clipPath;
+    if (node.zIndex != null) { cls.push("relative"); style["zIndex"] = String(node.zIndex); }
+    if (node.overflow) cls.push(node.overflow === "hidden" ? "overflow-hidden" : "overflow-visible");
     if (node.width) cls.push(`w-[${node.width}px]`);
     if (node.fullHeight) cls.push("min-h-screen");
     else if (node.minHeight) cls.push(`min-h-[${node.minHeight}px]`);
@@ -152,13 +156,18 @@ function atomInner(node: AtomNode, o: TwOpts): string {
     const src = esc(node.src ?? "");
     const alt = esc(node.alt ?? "");
     const sh = node.boxShadow ? (o.jsx ? ` style={{ boxShadow: ${JSON.stringify(node.boxShadow)} }}` : ` style="box-shadow:${node.boxShadow}"`) : "";
+    // トリミング（表示位置・拡大）。任意値クラスで出す（`_` はTailwindでスペースに戻る）。
+    const zoomed = isCropZoomed(node);
+    const pos = hasCropPos(node) || zoomed ? cropPosition(node).replace(/ /g, "_") : "";
+    const crop = [pos ? `object-[${pos}]` : "", zoomed ? `scale-[${cropZoom(node)}] origin-[${pos}]` : ""].filter(Boolean).join(" ");
+    const clip = (inner: string) => (zoomed ? `<div ${o.jsx ? "className" : "class"}="w-full h-full overflow-hidden">${inner}</div>` : inner);
     if (o.jsx && o.nextImage) {
       // next/image：fill で親(relative/absolute・サイズ指定済み)を埋める。dataURLは最適化対象外なので unoptimized。
       const unopt = (node.src ?? "").startsWith("data:") ? " unoptimized" : "";
       const sizes = node.width ? ` sizes="${node.width}px"` : "";
-      return `<Image src="${src}" alt="${alt}" fill${sizes} className="object-cover"${unopt}${sh} />`;
+      return clip(`<Image src="${src}" alt="${alt}" fill${sizes} className="object-${node.fit ?? "cover"}${crop ? " " + crop : ""}"${unopt}${sh} />`);
     }
-    return `<img src="${src}" alt="${alt}" ${o.jsx ? "className" : "class"}="w-full h-full object-cover block"${sh} />`;
+    return clip(`<img src="${src}" alt="${alt}" ${o.jsx ? "className" : "class"}="w-full h-full object-${node.fit ?? "cover"} block${crop ? " " + crop : ""}"${sh} />`);
   }
   const svg = svgScalable(node.svg ?? "");
   const fil = node.boxShadow ? (o.jsx ? ` style={{ filter: ${JSON.stringify(`drop-shadow(${node.boxShadow})`)} }}` : ` style="filter:drop-shadow(${node.boxShadow})"`) : "";
@@ -252,7 +261,7 @@ export function pageToTailwindHtml(page: Page, opt?: { snap?: boolean; tokens?: 
 <title>${esc(page.name)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="${GOOGLE_FONTS_HREF}">
+<link rel="stylesheet" href="${googleFontsHref(usedFontIds(page))}">
 <script src="https://cdn.tailwindcss.com"></script>
 ${rootCss}
 </head>
@@ -279,7 +288,7 @@ export function pageToJsx(page: Page, opt?: { snap?: boolean; tokens?: boolean; 
   const imgNote = useImg
     ? `// next/image を使用。外部URLの画像を最適化するには next.config に許可を追加してください：\n//   images: { remotePatterns: [{ protocol: "https", hostname: "**" }] }\n`
     : "";
-  const fontNote = `// フォントは globals.css / layout で Google Fonts を読み込んでください：${GOOGLE_FONTS_HREF}\n`;
+  const fontNote = `// フォントは globals.css / layout で Google Fonts を読み込んでください：${googleFontsHref(usedFontIds(page))}\n`;
 
   if (o.sections) {
     // トップレベルを個別コンポーネントに分割

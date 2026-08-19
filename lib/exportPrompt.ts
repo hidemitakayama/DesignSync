@@ -3,19 +3,22 @@
 
 import { type Page, type SceneNode, isContainer } from "./types";
 import type { FontId } from "./fonts";
+import { fontFamilies } from "./fonts";
 import { pageToJsx } from "./exportTailwind";
 
-// FontId → Google Fonts の family名 / weights / next/font のimport名
-const FONT_META: Record<FontId, { family: string; weights: string; nextName: string }> = {
-  sans: { family: "Noto Sans JP", weights: "400 / 700 / 800", nextName: "Noto_Sans_JP" },
-  serif: { family: "Noto Serif JP", weights: "400 / 700", nextName: "Noto_Serif_JP" },
-  rounded: { family: "M PLUS Rounded 1c", weights: "400 / 700 / 800", nextName: "M_PLUS_Rounded_1c" },
-  kaku: { family: "Zen Kaku Gothic New", weights: "400 / 700", nextName: "Zen_Kaku_Gothic_New" },
-  mincho: { family: "Shippori Mincho", weights: "400 / 700 / 800", nextName: "Shippori_Mincho" },
-  inter: { family: "Inter ＋ 日本語は Noto Sans JP", weights: "400 / 500 / 600 / 700 / 800", nextName: "Inter" },
-  notosans: { family: "Noto Sans ＋ 日本語は Noto Sans JP", weights: "400 / 700 / 800", nextName: "Noto_Sans" },
-  notoserif: { family: "Noto Serif ＋ 日本語は Noto Serif JP", weights: "400 / 700", nextName: "Noto_Serif" },
-};
+// FontId → Google Fonts の family名 / weights / next/font のimport名。
+// 定義は lib/fonts.ts の表（FONTS[].gf）に一元化してあるので、そこから組み立てる。
+// gf の2つ目は欧文フォントの日本語フォールバック（例：Inter ＋ Noto Sans JP）。
+function fontMeta(id: FontId): { family: string; weights: string; nextName: string } | undefined {
+  const gf = fontFamilies(id);
+  if (!gf.length) return undefined;
+  const [primary, fallback] = gf;
+  return {
+    family: fallback ? `${primary.family} ＋ 日本語は ${fallback.family}` : primary.family,
+    weights: primary.weights.join(" / "),
+    nextName: primary.family.replace(/ /g, "_"),
+  };
+}
 
 // 渡された全ページで実際に使われているフォントを集める（未指定は既定の sans 扱い）
 function usedFonts(pages: Page[]): FontId[] {
@@ -23,7 +26,7 @@ function usedFonts(pages: Page[]): FontId[] {
   const walk = (n: SceneNode) => {
     if (n.type === "atom" && n.atomType === "text") {
       const fid = (n.style?.fontFamily as FontId | undefined) ?? "sans";
-      if (FONT_META[fid]) set.add(fid);
+      if (fontMeta(fid)) set.add(fid);
     }
     if (isContainer(n)) n.children.forEach(walk);
   };
@@ -41,7 +44,7 @@ export function buildCursorPrompt(page: Page, sp?: Page | null): string {
   const jsx = pageToJsx(page, opts);
   const spJsx = sp ? pageToJsx(sp, opts) : null;
   const fonts = usedFonts(sp ? [page, sp] : [page])
-    .map((id) => `- ${FONT_META[id].family}（${FONT_META[id].weights}） … next/font/google の \`${FONT_META[id].nextName}\``)
+    .map((id) => { const m = fontMeta(id)!; return `- ${m.family}（${m.weights}） … next/font/google の \`${m.nextName}\``; })
     .join("\n");
   const name = page.name || "ページ";
 

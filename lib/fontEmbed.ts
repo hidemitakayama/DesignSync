@@ -5,19 +5,11 @@
 import type { Page, SceneNode, ContainerNode } from "./types";
 import { isContainer } from "./types";
 import type { FontId } from "./fonts";
+import { fontFamilies } from "./fonts";
 
-// FontId → 埋め込む Google Fonts の family群（GOOGLE_FONTS_HREF と一致）。
+// 埋め込む family群は lib/fonts.ts の表（FONTS[].gf）から引く。
 // 欧文フォントは日本語フォールバック（Noto Sans/Serif JP）も一緒に埋め込み、和文も完全再現する。
-const GF: Record<FontId, { family: string; weights: number[] }[]> = {
-  sans: [{ family: "Noto Sans JP", weights: [400, 700, 800] }],
-  serif: [{ family: "Noto Serif JP", weights: [400, 700] }],
-  rounded: [{ family: "M PLUS Rounded 1c", weights: [400, 700, 800] }],
-  kaku: [{ family: "Zen Kaku Gothic New", weights: [400, 700] }],
-  mincho: [{ family: "Shippori Mincho", weights: [400, 700, 800] }],
-  inter: [{ family: "Inter", weights: [400, 500, 600, 700, 800] }, { family: "Noto Sans JP", weights: [400, 700, 800] }],
-  notosans: [{ family: "Noto Sans", weights: [400, 700, 800] }, { family: "Noto Sans JP", weights: [400, 700, 800] }],
-  notoserif: [{ family: "Noto Serif", weights: [400, 700] }, { family: "Noto Serif JP", weights: [400, 700] }],
-};
+const GF = (id: FontId) => fontFamilies(id);
 
 // フォントごとに「そのフォントで使われている文字」を集める（サブセットを最小化）
 function collect(page: Page): Map<FontId, Set<string>> {
@@ -25,7 +17,7 @@ function collect(page: Page): Map<FontId, Set<string>> {
   const walk = (n: SceneNode) => {
     if (n.type === "atom" && n.atomType === "text") {
       const fid = n.style?.fontFamily as FontId | undefined;
-      if (fid && GF[fid]) {
+      if (fid && GF(fid).length) {
         const set = m.get(fid) ?? new Set<string>();
         const text = n.runs?.length ? n.runs.map((r) => r.text).join("") : n.text ?? "";
         for (const ch of text) set.add(ch);
@@ -56,7 +48,7 @@ export async function buildEmbeddedFontCss(page: Page): Promise<string> {
     if (chars.size === 0) continue;
     const text = encodeURIComponent([...chars].join(""));
     // このフォントidに紐づく family群（欧文＋日本語フォールバック等）をそれぞれサブセット埋め込み
-    for (const { family, weights } of GF[id]) {
+    for (const { family, weights } of GF(id)) {
       const fam = family.replace(/ /g, "+");
       const url = `https://fonts.googleapis.com/css2?family=${fam}:wght@${weights.join(";")}&text=${text}&display=swap`;
       let css: string;

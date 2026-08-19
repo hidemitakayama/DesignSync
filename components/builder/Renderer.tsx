@@ -1,5 +1,5 @@
 "use client";
-import { useRef, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { useSortable, SortableContext, horizontalListSortingStrategy, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { X } from "lucide-react";
@@ -7,8 +7,9 @@ import { useBuilder } from "@/lib/store";
 import { useUi } from "@/lib/uiStore";
 import { type SceneNode, type AtomNode, isContainer, isAtom, paddingCss, marginCss } from "@/lib/types";
 import { sectionPaddingCss } from "@/lib/layout";
-import { resolveBackground, resolveBackgroundNoImage, needsBgLayer, bgImageLayerCss, bgOverlayLayerCss } from "@/lib/patterns";
+import { resolveBackground, resolveBackgroundNoImage, needsBgLayer, bgImageLayerCss, bgOverlayLayerCss, overlayPaints } from "@/lib/patterns";
 import { maskCss, hasMask } from "@/lib/mask";
+import { cropImgCss, isCropZoomed } from "@/lib/imageCrop";
 import { fontCss } from "@/lib/fonts";
 import { svgScalable } from "@/lib/svg";
 import { useImageSrc } from "@/components/studio/useImageSrc";
@@ -101,6 +102,66 @@ function ResizeHandle({ id, w, h }: { id: string; w: number; h: number }) {
   );
 }
 
+// 選択中セクションの下端に出す「高さ」ハンドル。上下ドラッグで minHeight を変える。
+// minHeight＝“最小”なので、中身がそれより高ければ中身が優先される（＝文字が切れない）。
+// 親は position:relative（選択中は必ず付く）である前提。
+function SectionHeightHandle({ id }: { id: string }) {
+  const update = useBuilder((s) => s.updateNode);
+  const zoom = useUi((s) => s.zoom);
+  const st = useRef<{ py: number; h0: number } | null>(null);
+  const [live, setLive] = useState<number | null>(null); // ドラッグ中に出す現在値
+
+  const onDown = (e: React.PointerEvent) => {
+    e.stopPropagation(); // 選択・並び替えのドラッグに取られない
+    // 起点は「今の実寸」。minHeight 未設定（自動）でもそこから伸ばし始められる。
+    const sec = (e.currentTarget as HTMLElement).parentElement;
+    const h0 = sec ? sec.offsetHeight : 0; // offsetHeight は transform:scale の影響を受けない実寸
+    st.current = { py: e.clientY, h0 };
+    setLive(h0);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    const s = st.current;
+    if (!s) return;
+    // キャンバスは transform:scale(zoom) なので、画面上の移動量をレイアウト上の px に戻す
+    const dy = (e.clientY - s.py) / (zoom || 1);
+    const next = Math.max(0, Math.round(s.h0 + dy));
+    setLive(next);
+    update(id, { minHeight: next > 0 ? next : undefined }); // 0＝自動（指定なし）に戻す
+  };
+  const onUp = (e: React.PointerEvent) => {
+    st.current = null;
+    setLive(null);
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+  };
+  return (
+    <div
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onUp}
+      onClick={(e) => e.stopPropagation()}
+      title="上下ドラッグでセクションの高さを変更（最小の高さ・0で自動）"
+      style={{
+        position: "absolute", left: 0, right: 0, bottom: -5, height: 10, zIndex: 55,
+        display: "grid", placeItems: "center", cursor: "ns-resize", touchAction: "none",
+      }}
+    >
+      {/* つまみ（バー）。細い帯なので当たり判定は上の親div側で広く取る。 */}
+      <div style={{ width: 46, height: 6, borderRadius: 9999, background: "#2563eb", border: "2px solid #fff", boxShadow: "0 1px 4px rgba(0,0,0,.25)" }} />
+      {live != null && (
+        <span style={{
+          position: "absolute", bottom: 14, padding: "2px 8px", borderRadius: 9999,
+          background: "#2563eb", color: "#fff", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+          fontVariantNumeric: "tabular-nums", pointerEvents: "none",
+        }}>
+          {live > 0 ? `${live}px` : "自動"}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // flexアイテムの flex 短縮形。
 // - basisOverride（親の columns から算出）が来たら、その等幅で固定＝N枚ごとに折り返す
 // - なければ item 自身の basis / grow に従う
@@ -187,6 +248,7 @@ export default function NodeView({ node, basisOverride }: { node: SceneNode; bas
       padding: spPadding() ?? (node.type === "section" ? sectionPaddingCss(node) : paddingCss(node)),
       background: bgLayer ? resolveBackgroundNoImage(node) : resolveBackground(node),
       borderRadius: node.radius,
+      clipPath: node.clipPath,
       border: node.borderWidth ? `${node.borderWidth}px solid ${node.borderColor ?? "#e5e7eb"}` : undefined,
       boxShadow: node.boxShadow,
       width: sp?.width ?? node.width,
@@ -217,14 +279,21 @@ export default function NodeView({ node, basisOverride }: { node: SceneNode; bas
       style.position = "relative";
       style.isolation = "isolate";
     }
-    if (bgLayer) { style.position = "relative"; style.isolation = "isolate"; style.overflow = "hidden"; } // 変形画像を背後に敷き、はみ出しを切る
+    if (bgLayer) { style.position = "relative"; style.isolation = "isolate"; style.overflow = "hidden"; }
+    if (node.overflow) style.overflow = node.overflow; // 明示指定が最優先
+    // 重なり順：z-index は位置指定要素にしか効かないので position も併せて付ける
+    if (node.zIndex != null) { style.position = style.position ?? "relative"; style.zIndex = node.zIndex; } // 変形画像を背後に敷き、はみ出しを切る
     if (selected) style.position = "relative"; // 削除ボタンの基準
     const strategy = node.direction === "row" ? horizontalListSortingStrategy : verticalListSortingStrategy;
     return (
       <div {...dndProps} style={style} className={columnsClass}>
         {/* 変形（反転・拡大縮小）できる背景画像レイヤー＋暗さオーバーレイ（本文の後ろ z-index:-1） */}
         {bgLayer && node.bgImage && <div aria-hidden style={bgImageLayerCss(node.bgImage) as CSSProperties} />}
-        {bgLayer && node.bgImage?.overlay ? <div aria-hidden style={bgOverlayLayerCss(node.bgImage.overlay) as CSSProperties} /> : null}
+        {bgLayer && node.bgImage
+          ? overlayPaints(node.bgImage).map((p, i) => (
+              <div key={i} aria-hidden style={bgOverlayLayerCss(p) as CSSProperties} />
+            ))
+          : null}
         {/* 背景の自由配置SVG（フローの外・本文の後ろ） */}
         {freeChildren.map((f) => (
           <FreeNodeView key={f.id} node={f} />
@@ -239,6 +308,8 @@ export default function NodeView({ node, basisOverride }: { node: SceneNode; bas
           })}
         </SortableContext>
         {selected && <DeleteBadge id={node.id} />}
+        {/* セクションだけ下端で高さを直接ドラッグできる（全画面指定中は 100vh が優先なので出さない） */}
+        {selected && admin && node.type === "section" && !node.fullHeight && <SectionHeightHandle id={node.id} />}
       </div>
     );
   }
@@ -276,11 +347,14 @@ export default function NodeView({ node, basisOverride }: { node: SceneNode; bas
   }
 
   if (node.atomType === "image") {
+    const m = { shape: node.maskShape, svg: node.maskSvg };
+    // eslint-disable-next-line @next/next/no-img-element
+    const img = <img src={imgSrc} alt={node.alt ?? ""} style={{ width: "100%", height: "100%", objectFit: node.fit ?? "cover", display: "block", ...cropImgCss(node), ...maskCss(m), boxShadow: hasMask(m) ? undefined : node.boxShadow, filter: hasMask(m) && node.boxShadow ? `drop-shadow(${node.boxShadow})` : undefined }} />;
     // img は子要素を持てないので、削除ボタンを載せるためラッパーで包む。
+    // 拡大トリミング中だけ、はみ出しを切る入れ物を内側に挟む（外側で切ると削除ボタンまで切れる）。
     return (
       <div {...dndProps} style={{ position: "relative", width: node.width, height: node.height, ...atomFlexStyle(node, basisOverride), ...itemStyle }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imgSrc} alt={node.alt ?? ""} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", ...maskCss({ shape: node.maskShape, svg: node.maskSvg }), boxShadow: hasMask({ shape: node.maskShape, svg: node.maskSvg }) ? undefined : node.boxShadow, filter: hasMask({ shape: node.maskShape, svg: node.maskSvg }) && node.boxShadow ? `drop-shadow(${node.boxShadow})` : undefined }} />
+        {isCropZoomed(node) ? <div style={{ width: "100%", height: "100%", overflow: "hidden" }}>{img}</div> : img}
         {selected && <DeleteBadge id={node.id} />}
         {selected && admin && <ResizeHandle id={node.id} w={node.width ?? 0} h={node.height ?? 0} />}
       </div>
@@ -336,8 +410,11 @@ function FreeNodeView({ node }: { node: AtomNode }) {
         {node.runs && node.runs.length ? node.runs.map((r, i) => <span key={i} style={r.color ? { color: r.color } : undefined}>{r.text}</span>) : node.text}
       </div>
     ) : node.atomType === "image" ? (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={imgSrc} alt={node.alt ?? ""} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none" }} />
+      // 拡大トリミング中は、はみ出しを切る入れ物で包む（自由配置でも同じ見え方にする）
+      <div style={{ width: "100%", height: "100%", overflow: isCropZoomed(node) ? "hidden" : undefined, pointerEvents: "none" }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={imgSrc} alt={node.alt ?? ""} style={{ width: "100%", height: "100%", objectFit: node.fit ?? "cover", display: "block", ...cropImgCss(node) }} />
+      </div>
     ) : (
       <div className="[&>svg]:h-full [&>svg]:w-full" style={{ width: "100%", height: "100%", pointerEvents: "none" }} dangerouslySetInnerHTML={{ __html: svgScalable(node.svg ?? "") }} />
     );

@@ -29,11 +29,25 @@ export interface BgPattern {
   size?: number; // マス目/間隔(px)。未指定は種類ごとの既定値
 }
 
+// 背景画像に重ねるオーバーレイの向き。"all"=全面均一／方向指定＝その辺が濃いグラデーション。
+export type OverlayDir = "all" | "left" | "right" | "top" | "bottom";
+
 // 背景画像（ヒーローの全画面写真など）。background（単色ベース）の上に敷く。
 export interface BgImage {
   src: string; // 画像URL / データURL
   fit?: "cover" | "contain"; // 既定 cover（全面を覆う）
-  overlay?: number; // 上に重ねる黒の不透明度 0〜1（文字を読みやすくする。未指定=なし）
+  overlay?: number; // 上に重ねる黒の不透明度 0〜1（＝暗くする。濃い文字を読みやすくする。未指定=なし）
+  overlayLight?: number; // 上に重ねる白の不透明度 0〜1（＝明るくする。濃い写真に濃い文字を載せる。未指定=なし）
+  // オーバーレイのかけ方。未指定/"all"=全面に均一。方向を指定すると「その辺が最も濃く、反対側で0」の
+  // グラデーションになる（例："left" で FV の左半分だけ黒く落として白文字を載せる）。
+  overlayDir?: OverlayDir;
+  // 方向指定時に「0%になりきるまでの幅」を % で指定（未指定=100＝反対側の端で0）。
+  // 例：50 なら左端100%→画面中央で0%。以降は透明のまま。
+  overlaySpread?: number;
+  // 表示位置（background-position）。画像のどの部分を見せるかを % で指定する。
+  // 0=左端/上端・50=中央（既定）・100=右端/下端。cover で切れてしまう「顔が隠れる」等の調整用。
+  posX?: number;
+  posY?: number;
   scale?: number; // 拡大縮小（1=等倍・既定。1.2で20%拡大／0.8で縮小）
   flipH?: boolean; // 水平反転（左右）
   flipV?: boolean; // 垂直反転（上下）
@@ -57,6 +71,15 @@ export interface LayoutRules {
   // 最上位セクションの中身の寄せ方（フルブリード時）："center"=中央(既定) / "left"=常に画面左に寄せる。
   // 背景は常に全幅。left のときは中身(最大幅)を左端ガターに固定する。
   contentAlign?: "center" | "left";
+  // 重なり順。大きいほど手前。負の値で背面へ。
+  // 立ち絵をサムネイル列の「背後」に回す等、はみ出し配置の前後関係を決めるのに使う。
+  zIndex?: number;
+  // はみ出しの扱い。"hidden"＝枠からはみ出した子を切り取る。
+  // 立ち絵などを負のマージンで大きくはみ出させ、セクションの端できれいに断ち切るのに使う。
+  overflow?: "visible" | "hidden";
+  // 切り抜き（CSS clip-path）。斜めカットの帯など、Flexboxでは作れない外形を作る。
+  // 例：polygon(0 0, 100% 0, 40% 100%, 0 100%) ＝ 右端が斜めに切り落とされた形。
+  clipPath?: string;
   // 枠線・影（カード表現用）
   borderWidth?: number;
   borderColor?: string;
@@ -153,8 +176,15 @@ export interface AtomNode extends ItemProps {
   runs?: TextRun[]; // text の色付き区間（一部分だけ色変更）。あれば優先
   src?: string; // image のURL
   alt?: string; // image の代替テキスト
+  // 画像の枠への収め方。"cover"=枠を埋める(はみ出しは切る・既定) / "contain"=全体を収める(切らない)。
+  // 透過PNG（ロゴ・切り抜き）は cover だと切れるため contain を選ぶ。
+  fit?: "cover" | "contain";
   maskShape?: string; // image を図形で切り抜くプリセットキー（lib/mask.ts の MASK_SHAPES）
   maskSvg?: string; // image を任意SVGで切り抜く（生コード。maskShape より優先）
+  // 画像のトリミング（枠に対して画像のどこを・どれだけ寄って見せるか）。計算は lib/imageCrop.ts。
+  posX?: number; // 表示位置 %（object-position）。0=左端・50=中央（既定）・100=右端
+  posY?: number; // 表示位置 %。0=上端・50=中央（既定）・100=下端
+  zoom?: number; // 拡大率（1=等倍・既定〜4）。1より大きいと枠からはみ出た分が切られる
   svg?: string; // svg の生コード（Figma等からのエクスポート）
   width?: number; // image/svg の幅(px)
   height?: number; // image/svg の高さ(px)
@@ -260,6 +290,9 @@ export interface StudioElement {
   size: { width: number; height: number };
   style: StudioStyle;
   content: string; // text=本文 / image=URL / svg=生コード（図形は未使用）
+  // 画像の枠への収め方。"cover"=枠を埋める(はみ出しは切る・既定) / "contain"=全体を収める(切らない)。
+  // 透過PNG（ロゴ・切り抜き）は cover だと切れるため contain を選ぶ。
+  fit?: "cover" | "contain";
   maskShape?: string; // image を図形で切り抜くプリセットキー（lib/mask.ts の MASK_SHAPES）
   maskSvg?: string; // image を任意SVGで切り抜く（生コード。maskShape より優先）
   // --- 曲線ツール（パス変形）用（type==="svg" のうち編集可能なパスのみ） ---

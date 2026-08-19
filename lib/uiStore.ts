@@ -17,6 +17,11 @@ interface UiState {
   setZoom: (z: number) => void; // 0.25〜2 にクランプ
   pathEditId: string | null; // パス変形（頂点編集）中の要素id。nullで編集オフ
   setPathEditId: (id: string | null) => void;
+  // 左右サイドパネルの開閉（管理者のみ。畳むと細いレールになり、プレビューを広く使える）。
+  leftPanelOpen: boolean;  // 左＝レイヤー一覧
+  rightPanelOpen: boolean; // 右＝設定（プロパティ）
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
   syncState: SyncState; // Cursor同期の状態（LiveSyncが更新）
   setSyncState: (s: SyncState) => void;
   syncWarnAck: boolean; // 未接続編集の警告を今回のセッションで確認済みか
@@ -44,6 +49,10 @@ export const useUi = create<UiState>()(
       setZoom: (z) => set({ zoom: clampZoom(z) }),
       pathEditId: null,
       setPathEditId: (id) => set({ pathEditId: id }),
+      leftPanelOpen: true,
+      rightPanelOpen: true,
+      toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
+      toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
       syncState: "off",
       // 接続できたら警告確認フラグとモーダルをリセット（次に未接続になったら再び警告）
       setSyncState: (s) => set(s === "active" ? { syncState: s, syncWarnAck: false, syncGuardOpen: false } : { syncState: s }),
@@ -55,12 +64,14 @@ export const useUi = create<UiState>()(
       syncReconnect: null,
       setSyncReconnect: (f) => set({ syncReconnect: f }),
     }),
-    // 開閉状態は保存しない（previewDevice と zoom のみ保存）。
+    // レイヤーの開閉状態(expanded)は保存しない。表示設定（プレビュー幅・ズーム・左右パネルの開閉）だけ保存する。
+    // ※ 新しいキーは persist に無くても初期値（＝開いた状態）が使われるので、version は上げない
+    //    （上げると migrate が走って zoom が 100% にリセットされてしまう）。
     {
       name: "design-sync-ui",
       version: 4,
       skipHydration: true,
-      partialize: (s) => ({ previewDevice: s.previewDevice, zoom: s.zoom }),
+      partialize: (s) => ({ previewDevice: s.previewDevice, zoom: s.zoom, leftPanelOpen: s.leftPanelOpen, rightPanelOpen: s.rightPanelOpen }),
       // v4：全幅表示のため、以前の中途半端なズーム率は 100% にリセットする。
       migrate: (persisted) => {
         const p = persisted as { previewDevice?: PreviewDevice } | undefined;

@@ -2,11 +2,12 @@
 // 「見たまま」を静的HTMLとして再現する。フォントは <link>、画像/SVG は埋め込み（自己完結）。
 
 import { type Page, type SceneNode, type ContainerNode, type AtomNode, isContainer, isAtom, paddingCss, marginCss } from "./types";
-import { fontCss, GOOGLE_FONTS_HREF } from "./fonts";
+import { fontCss, googleFontsHref, usedFontIds } from "./fonts";
 import { svgScalable } from "./svg";
 import { sectionPaddingCss } from "./layout";
-import { resolveBackground, resolveBackgroundNoImage, needsBgLayer, bgImageLayerCssText, bgOverlayLayerCssText } from "./patterns";
+import { resolveBackground, resolveBackgroundNoImage, needsBgLayer, bgImageLayerCssText, bgOverlayLayerCssText, overlayPaints } from "./patterns";
 import { maskCssPairs, hasMask } from "./mask";
+import { cropCssPairs, isCropZoomed } from "./imageCrop";
 import { spCssText, SP_MAX } from "./responsive";
 
 // SP（レスポンシブ）ルールの収集：sp を持つ要素にクラスを振り、@media で上書きする。
@@ -76,6 +77,7 @@ function serializeContainer(node: ContainerNode, basisOverride?: string): string
     ["margin", marginCss(node)],
     ["background", bgLayer ? resolveBackgroundNoImage(node) : resolveBackground(node)],
     ["border-radius", pxOf(node.radius)],
+    ["clip-path", node.clipPath],
     ["border", node.borderWidth ? `${node.borderWidth}px solid ${node.borderColor ?? "#e5e7eb"}` : undefined],
     ["box-shadow", node.boxShadow],
     ["opacity", node.opacity != null && node.opacity !== 1 ? String(node.opacity) : undefined],
@@ -83,12 +85,14 @@ function serializeContainer(node: ContainerNode, basisOverride?: string): string
     ["min-height", node.fullHeight ? "100vh" : pxOf(node.minHeight)],
     ["flex", itemFlex(node, basisOverride)],
     ["align-self", alignSelfOf(node)],
-    ["position", relative ? "relative" : undefined],
+    ["position", relative || node.zIndex != null ? "relative" : undefined],
+    ["z-index", node.zIndex != null ? String(node.zIndex) : undefined],
     ["isolation", relative ? "isolate" : undefined],
-    ["overflow", bgLayer ? "hidden" : undefined],
+    ["overflow", node.overflow ?? (bgLayer ? "hidden" : undefined)],
   ]);
   const bgLayerHtml = bgLayer && node.bgImage
-    ? `<div aria-hidden style="${bgImageLayerCssText(node.bgImage)}"></div>` + (node.bgImage.overlay ? `<div aria-hidden style="${bgOverlayLayerCssText(node.bgImage.overlay)}"></div>` : "")
+    ? `<div aria-hidden style="${bgImageLayerCssText(node.bgImage)}"></div>` +
+      overlayPaints(node.bgImage).map((p) => `<div aria-hidden style="${bgOverlayLayerCssText(p)}"></div>`).join("")
     : "";
   const clsList = [useColumns ? `ds-grid ds-cols-${cols}` : "", spClassName(node, useColumns ? "grid" : "flex")].filter(Boolean).join(" ");
   const cls = clsList ? ` class="${clsList}"` : "";
@@ -178,12 +182,15 @@ function atomInner(node: AtomNode): string {
     const m = { shape: node.maskShape, svg: node.maskSvg };
     const masked = hasMask(m);
     const s = css([
-      ["width", "100%"], ["height", "100%"], ["object-fit", "cover"], ["display", "block"],
+      ["width", "100%"], ["height", "100%"], ["object-fit", node.fit ?? "cover"], ["display", "block"],
+      ...cropCssPairs(node), // トリミング（表示位置・拡大）
       ...maskCssPairs(m),
       ["box-shadow", masked ? undefined : node.boxShadow],
       ["filter", masked && node.boxShadow ? `drop-shadow(${node.boxShadow})` : undefined],
     ]);
-    return `<img src="${esc(node.src ?? "")}" alt="${esc(node.alt ?? "")}" style="${s}">`;
+    const img = `<img src="${esc(node.src ?? "")}" alt="${esc(node.alt ?? "")}" style="${s}">`;
+    // 拡大トリミング中は、はみ出しを切る入れ物で包む
+    return isCropZoomed(node) ? `<div style="width:100%;height:100%;overflow:hidden">${img}</div>` : img;
   }
   const filter = node.boxShadow ? `;filter:drop-shadow(${node.boxShadow})` : "";
   return `<div style="width:100%;height:100%${filter}">${svgScalable(node.svg ?? "")}</div>`;
@@ -198,7 +205,8 @@ function renderBody(page: Page): { body: string; spCss: string } {
 }
 
 // HTMLドキュメントの外枠（reset＋レスポンシブグリッド＋追加CSS）。
-function htmlDoc(title: string, styleExtra: string, bodyInner: string): string {
+// fontsHref：そのページで実際に使われているフォントだけの Google Fonts URL（未使用分を読ませない）。
+function htmlDoc(title: string, styleExtra: string, bodyInner: string, fontsHref: string): string {
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -207,7 +215,7 @@ function htmlDoc(title: string, styleExtra: string, bodyInner: string): string {
 <title>${esc(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="${GOOGLE_FONTS_HREF}">
+${fontsHref ? `<link rel="stylesheet" href="${fontsHref}">` : ""}
 <style>
 *,*::before,*::after{box-sizing:border-box}body{margin:0}
 /* レスポンシブ・グリッド（columns）：ページ幅に応じて列数を変える */
@@ -227,7 +235,7 @@ ${bodyInner}
 
 export function pageToHtml(page: Page): string {
   const { body, spCss } = renderBody(page);
-  return htmlDoc(page.name, spCss ? `\n${spCss}` : "", `<div class="ds-page" style="width:100%;background:#fff;overflow:hidden">\n${body}\n</div>`);
+  return htmlDoc(page.name, spCss ? `\n${spCss}` : "", `<div class="ds-page" style="width:100%;background:#fff;overflow:hidden">\n${body}\n</div>`, googleFontsHref(usedFontIds(page)));
 }
 
 // PC版＋SP版を1つのHTMLに入れ、画面幅で自動切替（PC≧641 / SP≦640）。実サイトは1ファイルで両対応。
@@ -237,5 +245,5 @@ export function pageToResponsiveHtml(pc: Page, sp: Page): string {
   const toggle = `\n/* PC/SP 自動切替 */\n@media (max-width:${SP_MAX}px){.ds-pc{display:none!important}}@media (min-width:${SP_MAX + 1}px){.ds-sp{display:none!important}}`;
   const styleExtra = `${toggle}${P.spCss ? `\n${P.spCss}` : ""}${S.spCss ? `\n${S.spCss}` : ""}`;
   const inner = `<div class="ds-page ds-pc" style="width:100%;background:#fff;overflow:hidden">\n${P.body}\n</div>\n<div class="ds-page ds-sp" style="width:100%;background:#fff;overflow:hidden">\n${S.body}\n</div>`;
-  return htmlDoc(pc.name, styleExtra, inner);
+  return htmlDoc(pc.name, styleExtra, inner, googleFontsHref(usedFontIds(pc, sp)));
 }
